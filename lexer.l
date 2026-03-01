@@ -1,11 +1,11 @@
 %x COMMENT
-%option noyywrap
+%option noyywrap nounput noinput
 %{
     #include <stdio.h>
     #include <stdlib.h>
     #include <string.h> 
     #include "parser.tab.h"
-    int lno = 1; 
+    int lno = 1;
     void printdebug(const char* msg, char c); 
 %}
 
@@ -18,7 +18,7 @@
 "//".* ;
 [ \t\r]+  ;
 \n  {lno++;}
-^#.* ; 
+^#.* ;
 \\\n {lno++;}
 "auto"     {return AUTO;}
 "break"    {return BREAK;}
@@ -72,6 +72,8 @@
 "!="    {return NE;}
 "<="    {return LE;}
 ">="    {return GE;}
+"<"     {return LT;}
+">"     {return GT;}
 "&&"    {return AND;}
 "||"    {return OR;}
 "++"    {return INC;}
