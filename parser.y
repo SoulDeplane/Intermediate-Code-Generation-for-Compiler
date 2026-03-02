@@ -32,6 +32,7 @@
         struct Node *left;
         struct Node *right;
         char token[100];
+        char addr[50];
     } Node;
 
     /* AST Stack */
@@ -52,6 +53,39 @@
     Node *pop_tree();
     void printAST(Node* root, int level);
     void clear_tree(Node* root);
+    int temp_count = 0;
+    char* new_temp() {
+        char *t = (char*)malloc(20);
+        sprintf(t, "t%d", temp_count++);
+        return t;
+    }
+
+    void generate_ICG(Node* root) {
+        if (root == NULL) return;
+        
+        // Leaf nodes (identifiers/numbers) just copy their token to addr
+        if (root->left == NULL && root->right == NULL) {
+            strcpy(root->addr, root->token);
+            return;
+        }
+
+        // Post-order traversal: children first
+        generate_ICG(root->left);
+        generate_ICG(root->right);
+
+        // Logic for Operators
+        if (strcmp(root->token, "+") == 0 || strcmp(root->token, "-") == 0 || 
+            strcmp(root->token, "*") == 0 || strcmp(root->token, "/") == 0) {
+            
+            strcpy(root->addr, new_temp());
+            printf("%s = %s %s %s\n", root->addr, root->left->addr, root->token, root->right->addr);
+        } 
+        // Logic for Assignments
+        else if (strcmp(root->token, "=") == 0) {
+            printf("%s = %s\n", root->left->addr, root->right->addr);
+            strcpy(root->addr, root->left->addr);
+        }
+    }
 %}
 
 %union {
