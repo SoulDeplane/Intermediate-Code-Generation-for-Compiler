@@ -3,6 +3,7 @@
     #include <stdlib.h>
     #include <string.h>
     #include <limits.h>
+    #include "ast.h"
 
     void yyerror(const char*);
     int yylex();
@@ -13,7 +14,6 @@
     int datatype = -1;
     char tempStr[100];
 
-    /* Symbol Table Node */
     struct node {
         char name[20];
         int dtype;
@@ -27,65 +27,19 @@
         struct node *link;
     } *first = NULL;
 
-    /* AST Node */
-    typedef struct Node {
-        struct Node *left;
-        struct Node *right;
-        char token[100];
-        char addr[50];
-    } Node;
-
-    /* AST Stack */
     typedef struct tree_stack {
         Node *node;
         struct tree_stack *next;
     } tree_stack;
     tree_stack *tree_top = NULL;
 
-    /* Functions */
     struct node* lookup(char *name);
     struct node* insert(char *name, int type);
     void printsymtable();
     void cleansymbol();
     
-    void create_node(char *token, int leaf);
-    void push_tree(Node *newnode);
-    Node *pop_tree();
     void printAST(Node* root, int level);
     void clear_tree(Node* root);
-    int temp_count = 0;
-    char* new_temp() {
-        char *t = (char*)malloc(20);
-        sprintf(t, "t%d", temp_count++);
-        return t;
-    }
-
-    void generate_ICG(Node* root) {
-        if (root == NULL) return;
-        
-        // Leaf nodes (identifiers/numbers) just copy their token to addr
-        if (root->left == NULL && root->right == NULL) {
-            strcpy(root->addr, root->token);
-            return;
-        }
-
-        // Post-order traversal: children first
-        generate_ICG(root->left);
-        generate_ICG(root->right);
-
-        // Logic for Operators
-        if (strcmp(root->token, "+") == 0 || strcmp(root->token, "-") == 0 || 
-            strcmp(root->token, "*") == 0 || strcmp(root->token, "/") == 0) {
-            
-            strcpy(root->addr, new_temp());
-            printf("%s = %s %s %s\n", root->addr, root->left->addr, root->token, root->right->addr);
-        } 
-        // Logic for Assignments
-        else if (strcmp(root->token, "=") == 0) {
-            printf("%s = %s\n", root->left->addr, root->right->addr);
-            strcpy(root->addr, root->left->addr);
-        }
-    }
 %}
 
 %union {
@@ -120,7 +74,6 @@
 %%
 S : program { 
     printf("\n--- Intermediate Code (TAC) ---\n");
-    // Traverse the current tree to generate code
     if(tree_top != NULL) {
         generate_ICG(tree_top->node);
     }
@@ -144,7 +97,7 @@ function_definition
     ;
 
 parameter_list 
-    : /* empty */ 
+    : 
     | parameter_declaration
     | parameter_list COMMA parameter_declaration
     ;
@@ -198,7 +151,6 @@ init_declarator
         $<ptr>$ = res; 
     } ASSIGN assignment_expression {
         struct node* id_ptr = $<ptr>2;
-        /* Type Checking */
         if (id_ptr->dtype == 0) id_ptr->val.i = (int)$4;
         else if (id_ptr->dtype == 1) id_ptr->val.f = $4;
         create_node("=", 0);
@@ -290,7 +242,6 @@ void printdebug(const char* msg, char c) {
     else printf("Debug: %s at line %d\n", msg, lno);
 }
 
-/* SYMBOL TABLE LOGIC */
 struct node* lookup(char *name) {
     struct node *ptr = first;
     while(ptr != NULL) {
@@ -339,7 +290,6 @@ void cleansymbol() {
     first = NULL;
 }
 
-/* AST LOGIC */
 void push_tree(Node *newnode) {
     tree_stack *temp = (tree_stack*)malloc(sizeof(tree_stack));
     temp->node = newnode;
@@ -359,8 +309,9 @@ Node *pop_tree() {
 void create_node(char *token, int leaf) {
     Node *newnode = (Node*)malloc(sizeof(Node));
     strcpy(newnode->token, token);
-    newnode->left = newnode->right = NULL;
-    if(leaf == 0) {
+    if (leaf) {
+        newnode->left = newnode->right = NULL;
+    } else {
         newnode->right = pop_tree();
         newnode->left = pop_tree();
     }
