@@ -12,4 +12,5 @@ void create_node(char *token, int leaf);
 void push_tree(Node *newnode);
 Node *pop_tree();
 void generate_ICG(Node* root);
+void report_error(int line, const char* msg);
 #endif

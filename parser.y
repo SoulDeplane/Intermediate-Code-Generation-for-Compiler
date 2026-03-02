@@ -13,6 +13,7 @@
     int scope = 0;
     int datatype = -1;
     char tempStr[100];
+    int error_occurred = 0;
 
     struct node {
         char name[20];
@@ -73,16 +74,20 @@
 
 %%
 S : program { 
-    printf("\n--- Intermediate Code (TAC) ---\n");
-    if(tree_top != NULL) {
-        generate_ICG(tree_top->node);
-    }
+    if(!error_occurred) {
+        printf("\n--- Intermediate Code (TAC) ---\n");
+        if(tree_top != NULL) {
+            generate_ICG(tree_top->node);
+        }
 
-    printf("\n--- Abstract Syntax Tree ---\n");
-    while(tree_top != NULL) {
-        Node *root = pop_tree();
-        printAST(root, 0);
-        clear_tree(root);
+        printf("\n--- Abstract Syntax Tree ---\n");
+        while(tree_top != NULL) {
+            Node *root = pop_tree();
+            printAST(root, 0);
+            clear_tree(root);
+        }
+    } else {
+        printf("\n--- Compilation Halted Due to Errors ---\n");
     }
     printsymtable(); 
     cleansymbol(); 
@@ -102,7 +107,11 @@ parameter_list
     | parameter_list COMMA parameter_declaration
     ;
 
-parameter_declaration : type_specifier IDENTIFIER { insert($2, datatype); } ;
+parameter_declaration : type_specifier IDENTIFIER { 
+    if (insert($2, datatype) == NULL) {
+        /* Error already thrown in insert */
+    }
+} ;
 
 compound_statement 
     : LBRACE { scope++; } block_item_list RBRACE {
@@ -125,14 +134,41 @@ statement
     : compound_statement 
     | expression_statement 
     | iteration_statement 
-    | condition_statement 
+    | condition_statement
+    | error SEMICOLON { yyerror("Invalid statement; please check your syntax before the semicolon."); yyerrok; }
     ;
 
-condition_statement : IF LPAREN relational_expression RPAREN statement { create_node("if", 0); } ;
+condition_statement 
+    : IF LPAREN relational_expression RPAREN statement { 
+        Node *stmt = pop_tree();
+        Node *cond = pop_tree();
+        Node *ifnode = (Node*)malloc(sizeof(Node));
+        strcpy(ifnode->token, "if");
+        ifnode->left = cond;
+        ifnode->right = stmt;
+        push_tree(ifnode);
+    } 
+    ;
 
 iteration_statement 
-    : FOR LPAREN expression_statement expression_statement expression RPAREN statement { create_node("for", 0); }
-    | WHILE LPAREN relational_expression RPAREN statement { create_node("while", 0); }
+    : FOR LPAREN expression_statement expression_statement expression RPAREN statement { 
+        Node *stmt = pop_tree();
+        Node *cond = pop_tree();
+        Node *fornode = (Node*)malloc(sizeof(Node));
+        strcpy(fornode->token, "for");
+        fornode->left = cond;
+        fornode->right = stmt;
+        push_tree(fornode);
+    }
+    | WHILE LPAREN relational_expression RPAREN statement { 
+        Node *stmt = pop_tree();
+        Node *cond = pop_tree();
+        Node *whilenode = (Node*)malloc(sizeof(Node));
+        strcpy(whilenode->token, "while");
+        whilenode->left = cond;
+        whilenode->right = stmt;
+        push_tree(whilenode);
+    }
     ;
 
 type_specifier 
@@ -147,17 +183,33 @@ init_declarator_list : init_declarator | init_declarator_list COMMA init_declara
 init_declarator
     : IDENTIFIER { 
         struct node* res = insert($1, datatype);
-        create_node(res->name, 1); 
+        if (res) {
+            create_node(res->name, 1); 
+        } else {
+            create_node("dummy", 1);
+        }
         $<ptr>$ = res; 
     } ASSIGN assignment_expression {
         struct node* id_ptr = $<ptr>2;
-        if (id_ptr->dtype == 0) id_ptr->val.i = (int)$4;
-        else if (id_ptr->dtype == 1) id_ptr->val.f = $4;
-        create_node("=", 0);
+        if (id_ptr) {
+            if (id_ptr->dtype == 0) id_ptr->val.i = (int)$4;
+            else if (id_ptr->dtype == 1) id_ptr->val.f = $4;
+            create_node("=", 0);
+        } else {
+            Node* expr = pop_tree();
+            Node* dummy = pop_tree();
+            clear_tree(expr);
+            clear_tree(dummy);
+            create_node("dummy", 1);
+        }
     }
     | IDENTIFIER {
         struct node* res = insert($1, datatype);
-        create_node(res->name, 1);
+        if (res) {
+            create_node(res->name, 1);
+        } else {
+            create_node("dummy", 1);
+        }
     }
     ;
 
@@ -165,8 +217,11 @@ primary_expression
     : IDENTIFIER {
         struct node* res = lookup($1);
         if(!res) {
-            printf("Error at line %d: Undeclared identifier %s\n", lno, $1);
+            char errmsg[50];
+            sprintf(errmsg, "Undeclared identifier %s", $1);
+            report_error(lno, errmsg);
             $$ = 0;
+            create_node("dummy", 1);
         } else {
             if(res->dtype == 0) $$ = (float)res->val.i;
             else if(res->dtype == 1) $$ = res->val.f;
@@ -185,7 +240,9 @@ multiplicative_expression
     : unary_expression
     | multiplicative_expression MULT unary_expression { $$ = $1 * $3; create_node("*", 0); }
     | multiplicative_expression DIV unary_expression { 
-        if($3 == 0) printf("Warning at line %d: Division by zero\n", lno);
+        if($3 == 0) {
+            report_error(lno, "Division by zero");
+        }
         $$ = $1 / $3; create_node("/", 0); 
     }
     | multiplicative_expression MOD unary_expression { $$ = (int)$1 % (int)$3; create_node("%", 0); }
@@ -214,7 +271,9 @@ assignment_expression
     | IDENTIFIER { create_node($1, 1); } ASSIGN assignment_expression {
         struct node* res = lookup($1);
         if(!res) {
-            printf("Error at line %d: Undeclared identifier %s\n", lno, $1);
+            char errmsg[50];
+            sprintf(errmsg, "Undeclared identifier %s", $1);
+            report_error(lno, errmsg);
             $$ = 0;
         } else {
             if(res->dtype == 0) res->val.i = (int)$4;
@@ -233,8 +292,13 @@ int main() {
     return yyparse();
 }
 
+void report_error(int line, const char* msg) {
+    if(!error_occurred) error_occurred = 1;
+    fprintf(stderr, "[Friendly Compiler Notice] Error at line %d: %s\n", line, msg);
+}
+
 void yyerror(const char* s) {
-    fprintf(stderr, "Error: %s at line %d\n", s, lno);
+    report_error(lno, s);
 }
 
 void printdebug(const char* msg, char c) {
@@ -255,8 +319,10 @@ struct node* insert(char *name, int type) {
     struct node *ptr = first;
     while(ptr != NULL) {
         if(strcmp(ptr->name, name) == 0 && ptr->scope == scope && ptr->valid == 1) {
-            printf("Error at line %d: Redeclaration of %s\n", lno, name);
-            return ptr;
+            char errmsg[50];
+            sprintf(errmsg, "Redeclaration of %s", name);
+            report_error(lno, errmsg);
+            return NULL;
         }
         ptr = ptr->link;
     }
@@ -319,7 +385,7 @@ void create_node(char *token, int leaf) {
 }
 
 void printAST(Node* root, int level) {
-    if (root == NULL) return;
+    if (root == NULL || strcmp(root->token, "dummy") == 0) return;
     for (int i = 0; i < level; i++) printf("  ");
     printf("-> %s\n", root->token);
     printAST(root->left, level + 1);

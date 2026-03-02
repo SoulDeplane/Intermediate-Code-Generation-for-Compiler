@@ -14,7 +14,7 @@
 <COMMENT>"*/"   {BEGIN(INITIAL);}
 <COMMENT>\n {lno++;}
 <COMMENT>.  ;
-<COMMENT><<EOF>> { printdebug("Unterminated comment", ' '); return 0; }
+<COMMENT><<EOF>> { printdebug("Unterminated comment. You forgot to close your comment with */", ' '); return 0; }
 "//".* ;
 [ \t\r]+  ;
 \n  {lno++;}
@@ -115,7 +115,7 @@
 "]"     {return RBRACK;}
 "."     {return DOT;}
 L?\"([^"\\\n]|\\.)*\"     { yylval.sval = strdup(yytext); return STRING_LITERAL; }
-L?\"([^"\\]|\\.)* { printdebug("Unterminated string", '\"'); }
+L?\"([^"\\\n]|\\.)* { printdebug("Unterminated string. You forgot to close your quotes before the end of the line.", '\"'); }
 L?'([^'\\\n]|\\.)+'       { yylval.sval = strdup(yytext); return CHAR_LITERAL; }
 [a-zA-Z_][a-zA-Z0-9_]* { yylval.sval = strdup(yytext); return IDENTIFIER; }
 0[xX][a-fA-F0-9]+[uUlL]* { yylval.ival = (int)strtol(yytext, NULL, 16); return NUMBER; }
@@ -124,5 +124,5 @@ L?'([^'\\\n]|\\.)+'       { yylval.sval = strdup(yytext); return CHAR_LITERAL; }
 [0-9]*\.[0-9]*([eE][+-]?[0-9]+)?[fFlL]?|([0-9]+\.)(f|F|l|L)? { yylval.fval = atof(yytext); return FLOAT_VALUE; }
 [0-9]+[eE][+-]?[0-9]+[fFlL]?            { yylval.fval = atof(yytext); return FLOAT_VALUE; }
 <<EOF>> { return 0; }
-.   {printdebug("Unknown character", yytext[0]);}
+.   { printf("Lexical Error at line %d: Unexpected character '%s'. Check if you have a typo.\n", lno, yytext); }
 %%

@@ -19,7 +19,7 @@ char* new_label() {
 }
 
 void generate_ICG(Node* root) {
-    if (root == NULL) return;
+    if (root == NULL || strcmp(root->token, "dummy") == 0) return;
     if (root->left == NULL && root->right == NULL) {
         strcpy(root->addr, root->token);
         return;
