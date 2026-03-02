@@ -20,6 +20,7 @@
         int dtype;
         int scope;
         int valid;
+        int is_used;
         union value {
             float f;
             int i;
@@ -89,6 +90,13 @@ S : program {
     } else {
         printf("\n--- Compilation Halted Due to Errors ---\n");
     }
+    struct node *ftp = first;
+    while(ftp != NULL) {
+        if(ftp->valid == 1 && ftp->is_used == 0) {
+            fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+        }
+        ftp = ftp->link;
+    }
     printsymtable(); 
     cleansymbol(); 
 }
@@ -117,7 +125,12 @@ compound_statement
     : LBRACE { scope++; } block_item_list RBRACE {
         struct node *ftp = first;
         while(ftp != NULL) {
-            if(ftp->scope == scope && ftp->valid == 1) ftp->valid = 0;
+            if(ftp->scope == scope && ftp->valid == 1) {
+                if (ftp->is_used == 0) {
+                    fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+                }
+                ftp->valid = 0;
+            }
             ftp = ftp->link;
         }
         scope--;
@@ -192,6 +205,9 @@ init_declarator
     } ASSIGN assignment_expression {
         struct node* id_ptr = $<ptr>2;
         if (id_ptr) {
+            if (id_ptr->dtype == 0 && $4 != (float)((int)$4)) {
+                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value (%f) to the integer variable '%s'.\n", lno, $4, id_ptr->name);
+            }
             if (id_ptr->dtype == 0) id_ptr->val.i = (int)$4;
             else if (id_ptr->dtype == 1) id_ptr->val.f = $4;
             create_node("=", 0);
@@ -223,6 +239,7 @@ primary_expression
             $$ = 0;
             create_node("dummy", 1);
         } else {
+            res->is_used = 1;
             if(res->dtype == 0) $$ = (float)res->val.i;
             else if(res->dtype == 1) $$ = res->val.f;
             create_node(res->name, 1);
@@ -242,8 +259,11 @@ multiplicative_expression
     | multiplicative_expression DIV unary_expression { 
         if($3 == 0) {
             report_error(lno, "Division by zero");
+            $$ = 0;
+        } else {
+            $$ = $1 / $3; 
         }
-        $$ = $1 / $3; create_node("/", 0); 
+        create_node("/", 0); 
     }
     | multiplicative_expression MOD unary_expression { $$ = (int)$1 % (int)$3; create_node("%", 0); }
     ;
@@ -276,6 +296,9 @@ assignment_expression
             report_error(lno, errmsg);
             $$ = 0;
         } else {
+            if (res->dtype == 0 && $4 != (float)((int)$4)) {
+                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value (%f) to the integer variable '%s'.\n", lno, $4, res->name);
+            }
             if(res->dtype == 0) res->val.i = (int)$4;
             else if(res->dtype == 1) res->val.f = $4;
             $$ = $4;
@@ -316,6 +339,12 @@ struct node* lookup(char *name) {
 }
 
 struct node* insert(char *name, int type) {
+    if (type == 3) {
+        char errmsg[100];
+        sprintf(errmsg, "Variable '%s' cannot be declared as type 'void'", name);
+        report_error(lno, errmsg);
+        return NULL;
+    }
     struct node *ptr = first;
     while(ptr != NULL) {
         if(strcmp(ptr->name, name) == 0 && ptr->scope == scope && ptr->valid == 1) {
@@ -331,6 +360,7 @@ struct node* insert(char *name, int type) {
     newnode->dtype = type;
     newnode->scope = scope;
     newnode->valid = 1;
+    newnode->is_used = 0;
     newnode->link = first;
     first = newnode;
     return newnode;

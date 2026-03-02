@@ -41,6 +41,16 @@ void generate_ICG(Node* root) {
         printf("goto %s\n", label_start);
         printf("%s:\n", label_end);
         return;
+    } else if (strcmp(root->token, "for") == 0) {
+        char *label_start = new_label();
+        char *label_end = new_label();
+        printf("%s:\n", label_start);
+        generate_ICG(root->left);
+        printf("if %s == 0 goto %s\n", root->left->addr, label_end);
+        generate_ICG(root->right);  
+        printf("goto %s\n", label_start);
+        printf("%s:\n", label_end);
+        return;
     }
     generate_ICG(root->left);
     generate_ICG(root->right);
