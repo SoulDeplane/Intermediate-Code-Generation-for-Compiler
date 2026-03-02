@@ -119,6 +119,12 @@
 
 %%
 S : program { 
+    printf("\n--- Intermediate Code (TAC) ---\n");
+    // Traverse the current tree to generate code
+    if(tree_top != NULL) {
+        generate_ICG(tree_top->node);
+    }
+
     printf("\n--- Abstract Syntax Tree ---\n");
     while(tree_top != NULL) {
         Node *root = pop_tree();
