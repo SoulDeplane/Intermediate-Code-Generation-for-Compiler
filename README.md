@@ -65,6 +65,7 @@ make
 
 2. **Run the Compiler:**
 Feed a C source file into the generated executable.
+
 *On Windows (PowerShell):*
 ```powershell
 Get-Content test_input.c | .\analyzer.exe
@@ -91,3 +92,4 @@ make clean
 ---
 
 > **Note:** This tool is intended for educational purposes and covers a subset of the C language. It is not a replacement for production-grade compilers like GCC or Clang.
+
