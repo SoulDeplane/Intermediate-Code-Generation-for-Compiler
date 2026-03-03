@@ -66,10 +66,10 @@
 %left DIV MULT MOD
 %right ASSIGN
 
-%type <fval> assignment_expression primary_expression equality_expression 
-%type <fval> relational_expression additive_expression multiplicative_expression 
-%type <fval> unary_expression conditional_expression expression expression_statement 
-%type <fval> postfix_expression
+%type <ptr> assignment_expression primary_expression equality_expression 
+%type <ptr> relational_expression additive_expression multiplicative_expression 
+%type <ptr> unary_expression conditional_expression expression expression_statement 
+%type <ptr> postfix_expression argument_expression_list
 
 %start S
 
@@ -82,13 +82,18 @@ S : program {
         }
 
         printf("\n--- Abstract Syntax Tree ---\n");
-        while(tree_top != NULL) {
-            Node *root = pop_tree();
-            printAST(root, 0);
-            clear_tree(root);
+        tree_stack *temp = tree_top;
+        while(temp != NULL) {
+            printAST(temp->node, 0);
+            temp = temp->next;
         }
     } else {
         printf("\n--- Compilation Halted Due to Errors ---\n");
+    }
+    
+    while(tree_top != NULL) {
+        Node *root = pop_tree();
+        clear_tree(root);
     }
     struct node *ftp = first;
     while(ftp != NULL) {
@@ -139,9 +144,29 @@ compound_statement
     ;
 
 block_item_list : block_item | block_item_list block_item { create_node("stmt_seq", 0); } ;
-block_item : declaration | statement | RETURN expression_statement { create_node("return", 1); } ;
+block_item : declaration | statement 
+    | RETURN expression SEMICOLON { 
+        Node* expr = pop_tree();
+        Node* retNode = (Node*)malloc(sizeof(Node));
+        strcpy(retNode->token, "return");
+        retNode->left = expr;
+        retNode->right = NULL;
+        push_tree(retNode);
+    } 
+    | RETURN SEMICOLON { 
+        Node* retNode = (Node*)malloc(sizeof(Node));
+        strcpy(retNode->token, "return");
+        retNode->left = NULL;
+        retNode->right = NULL;
+        push_tree(retNode);
+    } 
+    ;
 
-declaration : type_specifier init_declarator_list SEMICOLON ;
+declaration 
+    : type_specifier init_declarator_list SEMICOLON 
+    | type_specifier init_declarator_list error { yyerror("Missing semicolon (;) after variable declaration."); yyerrok; }
+    | error init_declarator_list SEMICOLON { yyerror("Missing valid type specifier (int, float, etc) for declaration."); yyerrok; }
+    ;
 
 statement 
     : compound_statement 
@@ -149,6 +174,7 @@ statement
     | iteration_statement 
     | condition_statement
     | error SEMICOLON { yyerror("Invalid statement; please check your syntax before the semicolon."); yyerrok; }
+    | expression error { yyerror("Missing semicolon immediately following expression block."); yyerrok; }
     ;
 
 condition_statement 
@@ -161,18 +187,25 @@ condition_statement
         ifnode->right = stmt;
         push_tree(ifnode);
     } 
+    | IF error RPAREN statement { yyerror("Missing or malformed condition inside 'if'. Did you forget an opening '('?"); yyerrok; }
+    | IF LPAREN relational_expression error { yyerror("Missing closing ')' for 'if' condition."); yyerrok; }
     ;
 
 iteration_statement 
     : FOR LPAREN expression_statement expression_statement expression RPAREN statement { 
-        Node *stmt = pop_tree();
-        Node *cond = pop_tree();
+        Node *stmt = pop_tree();  // body
+        Node *inc = pop_tree();   // inc
+        Node *cond = pop_tree();  // cond
+        Node *init = pop_tree();  // init
         Node *fornode = (Node*)malloc(sizeof(Node));
         strcpy(fornode->token, "for");
-        fornode->left = cond;
+        fornode->left = init;
+        fornode->mid1 = cond;
+        fornode->mid2 = inc;
         fornode->right = stmt;
         push_tree(fornode);
     }
+    | FOR error statement { yyerror("Malformed 'for' loop declaration."); yyerrok; }
     | WHILE LPAREN relational_expression RPAREN statement { 
         Node *stmt = pop_tree();
         Node *cond = pop_tree();
@@ -182,6 +215,8 @@ iteration_statement
         whilenode->right = stmt;
         push_tree(whilenode);
     }
+    | WHILE error RPAREN statement { yyerror("Missing or malformed condition inside 'while'. Did you forget an opening '('?"); yyerrok; }
+    | WHILE LPAREN relational_expression error { yyerror("Missing closing ')' for 'while' condition."); yyerrok; }
     ;
 
 type_specifier 
@@ -205,11 +240,17 @@ init_declarator
     } ASSIGN assignment_expression {
         struct node* id_ptr = $<ptr>2;
         if (id_ptr) {
-            if (id_ptr->dtype == 0 && $4 != (float)((int)$4)) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value (%f) to the integer variable '%s'.\n", lno, $4, id_ptr->name);
+            if (id_ptr->dtype == 0 && $<ptr>4->dtype == 1) { // Float assign
+                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value to the integer variable '%s'.\n", lno, id_ptr->name);
+            } else if ((id_ptr->dtype == 0 || id_ptr->dtype == 1) && ($<ptr>4->dtype == 2)) {
+                fprintf(stderr, "[Friendly Compiler Notice] Type Mismatch Error at line %d: Cannot initialize a numeric variable '%s' with a character.\n", lno, id_ptr->name);
+                error_occurred = 1;
+            } else if ((id_ptr->dtype == 0 || id_ptr->dtype == 1) && $<ptr>4->dtype == 4 && id_ptr->dtype != 4) {
+                 // Allowing pointers (dtype 4) to be assigned freely if derefed or storing addr natively to avoid complicated deep pointer checking for this mock parser project
             }
-            if (id_ptr->dtype == 0) id_ptr->val.i = (int)$4;
-            else if (id_ptr->dtype == 1) id_ptr->val.f = $4;
+            
+            if (id_ptr->dtype == 0) id_ptr->val.i = ($<ptr>4->dtype == 0) ? $<ptr>4->val.i : (int)$<ptr>4->val.f;
+            else if (id_ptr->dtype == 1) id_ptr->val.f = ($<ptr>4->dtype == 1) ? $<ptr>4->val.f : (float)$<ptr>4->val.i;
             create_node("=", 0);
         } else {
             Node* expr = pop_tree();
@@ -227,6 +268,42 @@ init_declarator
             create_node("dummy", 1);
         }
     }
+    | IDENTIFIER LBRACK NUMBER RBRACK {
+        struct node* res = insert($1, datatype);
+        if (res) {
+            create_node(res->name, 1);
+        } else {
+            create_node("dummy", 1);
+        }
+    }
+    | MULT IDENTIFIER {
+        struct node* res = insert($2, 4); // Store as pointer type loosely
+        if (res) {
+            create_node(res->name, 1);
+        } else {
+            create_node("dummy", 1);
+        }
+        $<ptr>$ = res;
+    } ASSIGN assignment_expression {
+        struct node* id_ptr = $<ptr>2;
+        if (id_ptr) {
+            create_node("=", 0);
+        } else {
+            Node* expr = pop_tree();
+            Node* dummy = pop_tree();
+            clear_tree(expr);
+            clear_tree(dummy);
+            create_node("dummy", 1);
+        }
+    }
+    | MULT IDENTIFIER {
+        struct node* res = insert($2, 4); // Store as pointer type loosely
+        if (res) {
+            create_node(res->name, 1);
+        } else {
+            create_node("dummy", 1);
+        }
+    }
     ;
 
 primary_expression 
@@ -236,52 +313,202 @@ primary_expression
             char errmsg[50];
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
-            $$ = 0;
+            
+            struct node* dummy = (struct node*)malloc(sizeof(struct node));
+            dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+            $$ = dummy;
             create_node("dummy", 1);
         } else {
             res->is_used = 1;
-            if(res->dtype == 0) $$ = (float)res->val.i;
-            else if(res->dtype == 1) $$ = res->val.f;
+            
+            struct node* ret = (struct node*)malloc(sizeof(struct node));
+            memcpy(ret, res, sizeof(struct node));
+            $$ = ret;
             create_node(res->name, 1);
         }
     }
-    | NUMBER { $$ = (float)$1; sprintf(tempStr, "%d", $1); create_node(tempStr, 1); }
-    | FLOAT_VALUE { $$ = $1; sprintf(tempStr, "%f", $1); create_node(tempStr, 1); }
+    | NUMBER { 
+        struct node* num_node = (struct node*)malloc(sizeof(struct node));
+        num_node->dtype = 0;
+        num_node->val.i = $1;
+        $$ = num_node;
+        sprintf(tempStr, "%d", $1); 
+        create_node(tempStr, 1); 
+    }
+    | FLOAT_VALUE { 
+        struct node* f_node = (struct node*)malloc(sizeof(struct node));
+        f_node->dtype = 1;
+        f_node->val.f = $1;
+        $$ = f_node;
+        sprintf(tempStr, "%f", $1); 
+        create_node(tempStr, 1); 
+    }
+    | STRING_LITERAL {
+        struct node* s_node = (struct node*)malloc(sizeof(struct node));
+        s_node->dtype = 4; // 4 = String Literal
+        $$ = s_node;
+        create_node("string_lit", 1);
+    }
+    | CHAR_LITERAL {
+        struct node* c_node = (struct node*)malloc(sizeof(struct node));
+        c_node->dtype = 2; // 2 = Char Literal
+        $$ = c_node;
+        create_node("char_lit", 1);
+    }
     | LPAREN expression RPAREN { $$ = $2; }
     ;
 
-postfix_expression : primary_expression ;
-unary_expression : postfix_expression ;
+argument_expression_list
+    : assignment_expression {
+        Node* expr = pop_tree();
+        Node* paramNode = (Node*)malloc(sizeof(Node));
+        strcpy(paramNode->token, "param");
+        paramNode->left = expr;
+        paramNode->right = NULL;
+        push_tree(paramNode);
+        $$ = $1;
+    }
+    | argument_expression_list COMMA assignment_expression {
+        Node* expr = pop_tree();
+        Node* list = pop_tree();
+        Node* paramNode = (Node*)malloc(sizeof(Node));
+        strcpy(paramNode->token, "param");
+        paramNode->left = expr;
+        paramNode->right = NULL;
+        
+        Node* seq = (Node*)malloc(sizeof(Node));
+        strcpy(seq->token, "param_list");
+        seq->left = list;
+        seq->right = paramNode;
+        push_tree(seq);
+        $$ = $1;
+    }
+    ;
+
+postfix_expression 
+    : primary_expression 
+    | postfix_expression LBRACK expression RBRACK {
+        struct node* arr_node = (struct node*)malloc(sizeof(struct node));
+        arr_node->dtype = 0; 
+        $$ = arr_node;
+        create_node("[]", 0);
+    }
+    | IDENTIFIER LPAREN RPAREN {
+        struct node* res = lookup($1);
+        if(!res) {
+            char errmsg[50];
+            sprintf(errmsg, "Undeclared identifier %s", $1);
+            report_error(lno, errmsg);
+        }
+        
+        Node* callNode = (Node*)malloc(sizeof(Node));
+        strcpy(callNode->token, "call");
+        
+        Node* funcNode = (Node*)malloc(sizeof(Node));
+        strcpy(funcNode->token, $1);
+        funcNode->left = funcNode->right = NULL;
+        
+        callNode->left = funcNode;
+        callNode->right = NULL;
+        push_tree(callNode);
+        
+        struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        call_res->dtype = 0; 
+        $$ = call_res;
+    }
+    | IDENTIFIER LPAREN argument_expression_list RPAREN {
+        struct node* res = lookup($1);
+        if(!res) {
+            char errmsg[50];
+            sprintf(errmsg, "Undeclared identifier %s", $1);
+            report_error(lno, errmsg);
+        }
+        Node* args = pop_tree();
+        Node* callNode = (Node*)malloc(sizeof(Node));
+        strcpy(callNode->token, "call");
+        
+        Node* funcNode = (Node*)malloc(sizeof(Node));
+        strcpy(funcNode->token, $1);
+        funcNode->left = funcNode->right = NULL;
+        
+        callNode->left = funcNode;
+        callNode->right = args;
+        push_tree(callNode);
+        
+        struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        call_res->dtype = 0; 
+        $$ = call_res;
+    }
+    ;
+
+unary_expression 
+    : postfix_expression 
+    | BIT_AND unary_expression {
+         struct node* res = (struct node*)malloc(sizeof(struct node));
+         res->dtype = 4; // Returning as a generic pointer hook
+         $$ = res;
+         
+         Node* operand = pop_tree();
+         Node* opNode = (Node*)malloc(sizeof(Node));
+         strcpy(opNode->token, "addr");
+         opNode->left = operand;
+         opNode->right = NULL;
+         push_tree(opNode);
+    }
+    | MULT unary_expression {
+         struct node* res = (struct node*)malloc(sizeof(struct node));
+         res->dtype = 4; // Returning as a generic pointer hook
+         $$ = res;
+         
+         Node* operand = pop_tree();
+         Node* opNode = (Node*)malloc(sizeof(Node));
+         strcpy(opNode->token, "deref");
+         opNode->left = operand;
+         opNode->right = NULL;
+         push_tree(opNode);
+    }
+    ;
 
 multiplicative_expression 
     : unary_expression
-    | multiplicative_expression MULT unary_expression { $$ = $1 * $3; create_node("*", 0); }
-    | multiplicative_expression DIV unary_expression { 
-        if($3 == 0) {
-            report_error(lno, "Division by zero");
-            $$ = 0;
-        } else {
-            $$ = $1 / $3; 
-        }
-        create_node("/", 0); 
+    | multiplicative_expression MULT unary_expression { 
+        if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot perform multiplication on strings or characters."); }
+        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("*", 0); 
     }
-    | multiplicative_expression MOD unary_expression { $$ = (int)$1 % (int)$3; create_node("%", 0); }
+    | multiplicative_expression DIV unary_expression { 
+        if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot perform division on strings or characters."); }
+        float rhs = ($3->dtype == 0) ? (float)$3->val.i : $3->val.f;
+        if(rhs == 0.0) {
+            report_error(lno, "Division by zero");
+        }
+        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("/", 0); 
+    }
+    | multiplicative_expression MOD unary_expression { 
+        if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot modulo strings or characters."); }
+        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("%", 0); 
+    }
     ;
 
 additive_expression 
     : multiplicative_expression
-    | additive_expression PLUS multiplicative_expression { $$ = $1 + $3; create_node("+", 0); }
-    | additive_expression MINUS multiplicative_expression { $$ = $1 - $3; create_node("-", 0); }
+    | additive_expression PLUS multiplicative_expression { 
+        if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot explicitly add strings or characters."); }
+        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("+", 0); 
+    }
+    | additive_expression MINUS multiplicative_expression { 
+        if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot explicitly subtract strings or characters."); }
+        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("-", 0); 
+    }
     ;
 
 relational_expression 
     : additive_expression
-    | relational_expression LE additive_expression { $$ = $1 <= $3; create_node("<=", 0); }
-    | relational_expression GE additive_expression { $$ = $1 >= $3; create_node(">=", 0); }
-    | relational_expression LT additive_expression { $$ = $1 < $3; create_node("<", 0); }
-    | relational_expression GT additive_expression { $$ = $1 > $3; create_node(">", 0); }
-    | relational_expression EQ additive_expression { $$ = $1 == $3; create_node("==", 0); }
-    | relational_expression NE additive_expression { $$ = $1 != $3; create_node("!=", 0); }
+    | relational_expression LE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("<=", 0); }
+    | relational_expression GE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node(">=", 0); }
+    | relational_expression LT additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("<", 0); }
+    | relational_expression GT additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node(">", 0); }
+    | relational_expression EQ additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("==", 0); }
+    | relational_expression NE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("!=", 0); }
     ;
 
 equality_expression : relational_expression ;
@@ -294,20 +521,33 @@ assignment_expression
             char errmsg[50];
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
-            $$ = 0;
+            
+            struct node* dummy = (struct node*)malloc(sizeof(struct node));
+            dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+            $$ = dummy;
         } else {
-            if (res->dtype == 0 && $4 != (float)((int)$4)) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value (%f) to the integer variable '%s'.\n", lno, $4, res->name);
+            if (res->dtype == 0 && $4->dtype == 1) { // Int taking Float Assignment Check
+                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value to the integer variable '%s'.\n", lno, res->name);
+            } else if ((res->dtype == 0 || res->dtype == 1) && ($4->dtype == 2)) {
+                fprintf(stderr, "[Friendly Compiler Notice] Type Mismatch Error at line %d: Cannot assign a character to a numeric variable '%s'.\n", lno, res->name);
+                error_occurred = 1;
+            } else if ((res->dtype == 0 || res->dtype == 1) && $4->dtype == 4 && res->dtype != 4) {
+                 // Allowing pointers (dtype 4) to be assigned freely if derefed or storing addr natively
             }
-            if(res->dtype == 0) res->val.i = (int)$4;
-            else if(res->dtype == 1) res->val.f = $4;
+            
+            if(res->dtype == 0) res->val.i = ($4->dtype == 0) ? $4->val.i : (int)$4->val.f;
+            else if(res->dtype == 1) res->val.f = ($4->dtype == 1) ? $4->val.f : (float)$4->val.i;
             $$ = $4;
         }
         create_node("=", 0);
     }
     ;
 expression : assignment_expression ;
-expression_statement : SEMICOLON { $$ = 0; } | expression SEMICOLON { $$ = $1; };
+expression_statement : SEMICOLON { 
+    struct node* dummy = (struct node*)malloc(sizeof(struct node));
+    dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+    $$ = dummy; 
+} | expression SEMICOLON { $$ = $1; };
 
 %%
 int main() {
@@ -405,12 +645,17 @@ Node *pop_tree() {
 void create_node(char *token, int leaf) {
     Node *newnode = (Node*)malloc(sizeof(Node));
     strcpy(newnode->token, token);
+    newnode->mid1 = NULL;
+    newnode->mid2 = NULL;
     if (leaf) {
         newnode->left = newnode->right = NULL;
     } else {
         newnode->right = pop_tree();
         newnode->left = pop_tree();
     }
+    
+    // Grab the top pointer eval type implicitly
+    newnode->eval_type = tree_top && tree_top->node ? tree_top->node->eval_type : 0;
     push_tree(newnode);
 }
 
