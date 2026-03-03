@@ -26,6 +26,7 @@
             int i;
             char c;
         } val;
+        int is_allocated;
         struct node *link;
     } *first = NULL;
 
@@ -97,8 +98,13 @@ S : program {
     }
     struct node *ftp = first;
     while(ftp != NULL) {
-        if(ftp->valid == 1 && ftp->is_used == 0) {
-            fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+        if(ftp->valid == 1) {
+            if (ftp->is_used == 0) {
+                fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+            }
+            if (ftp->is_allocated == 1) {
+                fprintf(stderr, "[Friendly Compiler Notice] Warning: Memory leak detected! Variable '%s' was allocated but never freed before execution end.\n", ftp->name);
+            }
         }
         ftp = ftp->link;
     }
@@ -133,6 +139,9 @@ compound_statement
             if(ftp->scope == scope && ftp->valid == 1) {
                 if (ftp->is_used == 0) {
                     fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+                }
+                if (ftp->is_allocated == 1) {
+                    fprintf(stderr, "[Friendly Compiler Notice] Warning: Memory leak detected! Variable '%s' was allocated but never freed before leaving scope.\n", ftp->name);
                 }
                 ftp->valid = 0;
             }
@@ -248,6 +257,9 @@ init_declarator
             } else if ((id_ptr->dtype == 0 || id_ptr->dtype == 1) && $<ptr>4->dtype == 4 && id_ptr->dtype != 4) {
                  // Allowing pointers (dtype 4) to be assigned freely if derefed or storing addr natively to avoid complicated deep pointer checking for this mock parser project
             }
+            if (strcmp($<ptr>4->name, "__malloc__") == 0) {
+                id_ptr->is_allocated = 1;
+            }
             
             if (id_ptr->dtype == 0) id_ptr->val.i = ($<ptr>4->dtype == 0) ? $<ptr>4->val.i : (int)$<ptr>4->val.f;
             else if (id_ptr->dtype == 1) id_ptr->val.f = ($<ptr>4->dtype == 1) ? $<ptr>4->val.f : (float)$<ptr>4->val.i;
@@ -287,6 +299,9 @@ init_declarator
     } ASSIGN assignment_expression {
         struct node* id_ptr = $<ptr>2;
         if (id_ptr) {
+            if (strcmp($<ptr>4->name, "__malloc__") == 0) {
+                id_ptr->is_allocated = 1;
+            }
             create_node("=", 0);
         } else {
             Node* expr = pop_tree();
@@ -394,8 +409,12 @@ postfix_expression
         create_node("[]", 0);
     }
     | IDENTIFIER LPAREN RPAREN {
+        if (strcmp($1, "gets") == 0) {
+            fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: '%s' is unsafe; it can lead to buffer overflows. Consider using 'fgets' instead.\n", lno, $1);
+        }
+        
         struct node* res = lookup($1);
-        if(!res) {
+        if(!res && strcmp($1, "gets") != 0 && strcmp($1, "malloc") != 0 && strcmp($1, "free") != 0) {
             char errmsg[50];
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
@@ -413,12 +432,25 @@ postfix_expression
         push_tree(callNode);
         
         struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        if (strcmp($1, "malloc") == 0) strcpy(call_res->name, "__malloc__");
         call_res->dtype = 0; 
         $$ = call_res;
     }
     | IDENTIFIER LPAREN argument_expression_list RPAREN {
+        if (strcmp($1, "gets") == 0) {
+            fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: '%s' is unsafe; it can lead to buffer overflows. Consider using 'fgets' instead.\n", lno, $1);
+        }
+        
+        if (strcmp($1, "free") == 0) {
+            if ($3 && $3->is_allocated == 1) {
+                // For direct variable passing natively
+                struct node* free_target = lookup($3->name);
+                if (free_target) free_target->is_allocated = 0;
+            }
+        }
+
         struct node* res = lookup($1);
-        if(!res) {
+        if(!res && strcmp($1, "gets") != 0 && strcmp($1, "malloc") != 0 && strcmp($1, "free") != 0) {
             char errmsg[50];
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
@@ -436,6 +468,7 @@ postfix_expression
         push_tree(callNode);
         
         struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        if (strcmp($1, "malloc") == 0) strcpy(call_res->name, "__malloc__");
         call_res->dtype = 0; 
         $$ = call_res;
     }
@@ -534,6 +567,13 @@ assignment_expression
             } else if ((res->dtype == 0 || res->dtype == 1) && $4->dtype == 4 && res->dtype != 4) {
                  // Allowing pointers (dtype 4) to be assigned freely if derefed or storing addr natively
             }
+            if (strcmp($4->name, "__malloc__") == 0) {
+                res->is_allocated = 1;
+            }
+            if ($4->is_allocated == 1 && strcmp($4->name, res->name) != 0) {
+                // Pointer reassignment transfers implicit allocation bounds mock
+                res->is_allocated = 1;
+            }
             
             if(res->dtype == 0) res->val.i = ($4->dtype == 0) ? $4->val.i : (int)$4->val.f;
             else if(res->dtype == 1) res->val.f = ($4->dtype == 1) ? $4->val.f : (float)$4->val.i;
@@ -601,6 +641,7 @@ struct node* insert(char *name, int type) {
     newnode->scope = scope;
     newnode->valid = 1;
     newnode->is_used = 0;
+    newnode->is_allocated = 0;
     newnode->link = first;
     first = newnode;
     return newnode;
