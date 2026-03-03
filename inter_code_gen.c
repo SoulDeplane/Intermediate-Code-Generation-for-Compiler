@@ -1,4 +1,5 @@
 #include <stdio.h>
+extern FILE* icg_out;
 #include <stdlib.h>
 #include <string.h>
 #include "ast.h"
@@ -27,43 +28,43 @@ void generate_ICG(Node* root) {
     if (strcmp(root->token, "if") == 0) {
         char *label_end = new_label();
         generate_ICG(root->left); 
-        printf("if %s == 0 goto %s\n", root->left->addr, label_end);
+        fprintf(icg_out, "if %s == 0 goto %s\n", root->left->addr, label_end);
         generate_ICG(root->right);
-        printf("%s:\n", label_end);
+        fprintf(icg_out, "%s:\n", label_end);
         return;
     } else if (strcmp(root->token, "while") == 0) {
         char *label_start = new_label();
         char *label_end = new_label();
-        printf("%s:\n", label_start);
+        fprintf(icg_out, "%s:\n", label_start);
         generate_ICG(root->left);
-        printf("if %s == 0 goto %s\n", root->left->addr, label_end);
+        fprintf(icg_out, "if %s == 0 goto %s\n", root->left->addr, label_end);
         generate_ICG(root->right);
-        printf("goto %s\n", label_start);
-        printf("%s:\n", label_end);
+        fprintf(icg_out, "goto %s\n", label_start);
+        fprintf(icg_out, "%s:\n", label_end);
         return;
     } else if (strcmp(root->token, "for") == 0) {
         generate_ICG(root->left); // init
         char *label_start = new_label();
         char *label_end = new_label();
-        printf("%s:\n", label_start);
+        fprintf(icg_out, "%s:\n", label_start);
         generate_ICG(root->mid1); // cond
-        printf("if %s == 0 goto %s\n", root->mid1->addr, label_end);
+        fprintf(icg_out, "if %s == 0 goto %s\n", root->mid1->addr, label_end);
         generate_ICG(root->right); // body
         generate_ICG(root->mid2); // inc
-        printf("goto %s\n", label_start);
-        printf("%s:\n", label_end);
+        fprintf(icg_out, "goto %s\n", label_start);
+        fprintf(icg_out, "%s:\n", label_end);
         return;
     } else if (strcmp(root->token, "return") == 0) {
         if (root->left) {
             generate_ICG(root->left);
-            printf("return %s\n", root->left->addr);
+            fprintf(icg_out, "return %s\n", root->left->addr);
         } else {
-            printf("return\n");
+            fprintf(icg_out, "return\n");
         }
         return;
     } else if (strcmp(root->token, "param") == 0) {
         generate_ICG(root->left);
-        printf("param %s\n", root->left->addr);
+        fprintf(icg_out, "param %s\n", root->left->addr);
         return;
     } else if (strcmp(root->token, "param_list") == 0) {
         generate_ICG(root->left);
@@ -74,26 +75,26 @@ void generate_ICG(Node* root) {
         generate_ICG(root->left);
         char* t = new_temp();
         strcpy(root->addr, t);
-        printf("%s = call %s\n", t, root->left->addr);
+        fprintf(icg_out, "%s = call %s\n", t, root->left->addr);
         return;
     } else if (strcmp(root->token, "[]") == 0) {
         generate_ICG(root->left);
         generate_ICG(root->right);
         char* t = new_temp();
         strcpy(root->addr, t);
-        printf("%s = %s[%s]\n", t, root->left->addr, root->right->addr);
+        fprintf(icg_out, "%s = %s[%s]\n", t, root->left->addr, root->right->addr);
         return;
     } else if (strcmp(root->token, "addr") == 0) {
         generate_ICG(root->left);
         char* t = new_temp();
         strcpy(root->addr, t);
-        printf("%s = &%s\n", t, root->left->addr);
+        fprintf(icg_out, "%s = &%s\n", t, root->left->addr);
         return;
     } else if (strcmp(root->token, "deref") == 0) {
         generate_ICG(root->left);
         char* t = new_temp();
         strcpy(root->addr, t);
-        printf("%s = *%s\n", t, root->left->addr);
+        fprintf(icg_out, "%s = *%s\n", t, root->left->addr);
         return;
     }
     
@@ -106,10 +107,10 @@ void generate_ICG(Node* root) {
         strcmp(root->token, "==") == 0 || strcmp(root->token, "!=") == 0) {
         char *t = new_temp();
         strcpy(root->addr, t);
-        printf("%s = %s %s %s\n", root->addr, root->left->addr, root->token, root->right->addr);
+        fprintf(icg_out, "%s = %s %s %s\n", root->addr, root->left->addr, root->token, root->right->addr);
     } 
     else if (strcmp(root->token, "=") == 0) {
-        printf("%s = %s\n", root->left->addr, root->right->addr);
+        fprintf(icg_out, "%s = %s\n", root->left->addr, root->right->addr);
         strcpy(root->addr, root->left->addr);
     }
 }

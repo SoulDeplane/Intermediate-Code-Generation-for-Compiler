@@ -13,6 +13,9 @@ lex.yy.c: lexer.l parser.tab.h
 
 parser.tab.c parser.tab.h: parser.y
 	$(BISON) -d parser.y
+
+optimize: analyzer
+	python optimiser.py icg.txt --print
 	
 clean:
-	del /f /q lex.yy.c parser.tab.c parser.tab.h analyzer.exe
+	del /f /q lex.yy.c parser.tab.c parser.tab.h analyzer.exe icg.txt optimized_icg.txt

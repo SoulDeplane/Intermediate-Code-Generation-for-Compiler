@@ -9,6 +9,7 @@
     int yylex();
     extern FILE * yyin, *yyout;
     extern int lno;
+    FILE *icg_out = NULL;
     
     int scope = 0;
     int datatype = -1;
@@ -79,7 +80,14 @@ S : program {
     if(!error_occurred) {
         printf("\n--- Intermediate Code (TAC) ---\n");
         if(tree_top != NULL) {
-            generate_ICG(tree_top->node);
+            icg_out = fopen("icg.txt", "w");
+            if (icg_out) {
+                generate_ICG(tree_top->node);
+                fclose(icg_out);
+                printf("Intermediate Code Successfully exported to icg.txt\n");
+            } else {
+                printf("Failed to open icg.txt for writing.\n");
+            }
         }
 
         printf("\n--- Abstract Syntax Tree ---\n");
