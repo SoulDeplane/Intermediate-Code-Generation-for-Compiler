@@ -3,19 +3,18 @@
 %{
     #include <stdio.h>
     #include <stdlib.h>
-    #include <string.h> 
+    #include <string.h>
     #include "parser.tab.h"
     int lno = 1;
-    void printdebug(const char* msg, char c); 
+    void printdebug(const char* msg, char c);
 %}
 
 %%
-"/*"    {BEGIN(COMMENT);}
-<COMMENT>"*/"   {BEGIN(INITIAL);}
+"/*"   {BEGIN(COMMENT);}
 <COMMENT>\n {lno++;}
 <COMMENT>.  ;
 <COMMENT><<EOF>> { printdebug("Unterminated comment. You forgot to close your comment with */", ' '); return 0; }
-"//".* ;
+<COMMENT>"*/" {BEGIN(INITIAL);}
 [ \t\r]+  ;
 \n  {lno++;}
 ^#.* ;

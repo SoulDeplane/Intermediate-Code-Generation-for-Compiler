@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Intermediate Code Generator for C Language</title>
+    <style>
+        :root {
+            --bg: #1a1c19;
+            --panel-bg: #242921;
+            --accent: #c69d6d;
+            --text-main: #e2e8e0;
+            --border: #3a4235;
+            --success: #81b29a;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 20px;
+        }
+
+        .app-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto 1fr;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            height: 100%;
+        }
+
+        header {
+            grid-column: span 2;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 10px;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: var(--accent);
+            letter-spacing: -1px;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+            min-height: 0;
+        }
+
+        .panel-header {
+            padding: 12px 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        textarea {
+            flex-grow: 1;
+            background: transparent;
+            border: none;
+            color: #cbd5e1;
+            padding: 20px;
+            font-size: 14px;
+            resize: none;
+            outline: none;
+            line-height: 1.6;
+            overflow: auto;
+        }
+
+        textarea::placeholder {
+            color: #c69d6d;
+            opacity: 1;
+        }
+
+        .controls {
+            padding: 15px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 12px;
+        }
+
+        button {
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button:active {
+            transform: scale(0.97);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-dim);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.05);
+            opacity: 1;
+        }
+
+        .output-container {
+            display: grid;
+            grid-template-rows: 1.5fr 1.5fr;
+            gap: 20px;
+            min-height: 0;
+        }
+
+        pre {
+            margin: 0;
+            padding: 15px;
+            font-family: monospace;
+            font-size: 14px;
+            overflow: auto;
+            color: #94a3b8;
+            flex-grow: 1;
+        }
+
+        .text-error {
+            color: #ef4444;
+        }
+
+        .status-success {
+            color: var(--success);
+        }
+
+        pre:empty::before {
+            content: attr(placeholder);
+            color: #c69d6d;
+        }
+
+        @media (max-width: 900px) {
+            .app-container {
+                grid-template-columns: 1fr;
+            }
+
+            header {
+                grid-column: span 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+        <header>
+            <div class="logo">Intermediate Code Generation for Compiler</div>
+            <div style="flex-grow: 1; height: 1px; background: var(--border); margin: 0 20px;"></div>
+            <div id="runtime-clock" style="color: var(--text-dim); font-size: 0.9rem;">Ready</div>
+        </header>
+
+        <section class="panel">
+            <div class="panel-header">
+                <span>Input Workspace</span>
+                <span>UTF-8</span>
+            </div>
+            <textarea id="userInput" placeholder="Enter C code here..."></textarea>
+            <div class="controls">
+                <button id="execBtn">Process Data</button>
+                <button id="clearBtn" class="btn-secondary">Clear</button>
+            </div>
+        </section>
+
+        <div class="output-container">
+            <section class="panel">
+                <div class="panel-header">Result (Errors or TAC)</div>
+                <pre id="resultOut" style="color: var(--accent);" placeholder="No result yet..."></pre>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">Auto-Corrected Code</div>
+                <pre id="correctedOut" style="color: var(--success);" placeholder="No corrections applied..."></pre>
+            </section>
+        </div>
+    </div>
+
+    <script>
+        const execBtn = document.getElementById('execBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const resultOut = document.getElementById('resultOut');
+        const correctedOut = document.getElementById('correctedOut');
+        const userInput = document.getElementById('userInput');
+        const clock = document.getElementById('runtime-clock');
+
+        function updateClock() {
+            clock.textContent = new Date().toLocaleTimeString();
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        execBtn.addEventListener('click', async () => {
+            const input = userInput.value;
+            resultOut.textContent = '';
+            correctedOut.textContent = '';
+            resultOut.classList.remove('text-error');
+
+            if (!input.trim()) {
+                resultOut.classList.add('text-error');
+                resultOut.textContent = 'Error: No input found.';
+                return;
+            }
+
+            try {
+                const response = await fetch('/compile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: input })
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    const tac = (data.tac || '').trim();
+                    const err = (data.stderr || '').trim();
+
+                    if (tac && tac !== 'No TAC generated.') {
+                        resultOut.classList.remove('text-error');
+                        resultOut.style.color = 'var(--accent)';
+                        resultOut.textContent = tac;
+                    } else if (err) {
+                        resultOut.classList.add('text-error');
+                        resultOut.style.color = '';
+                        resultOut.textContent = err;
+                    } else {
+                        resultOut.classList.add('text-error');
+                        resultOut.textContent = 'No TAC generated.';
+                    }
+                    correctedOut.textContent = data.corrected_code || 'No corrections applied.';
+                } else {
+                    resultOut.classList.add('text-error');
+                    resultOut.textContent = `Error: ${data.stderr || 'Unknown server error.'}`;
+                }
+            } catch (err) {
+                resultOut.classList.add('text-error');
+                resultOut.textContent = `Network Error: ${err.message}`;
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            userInput.value = '';
+            resultOut.textContent = '';
+            correctedOut.textContent = '';
+            resultOut.classList.remove('text-error');
+        });
+    </script>
+</body>
+
+</html>

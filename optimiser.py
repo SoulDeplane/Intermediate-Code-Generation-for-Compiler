@@ -3,8 +3,8 @@ import sys
 import operator
 
 printContent=False
-istemp = lambda s : bool(re.match(r"^t[0-9]*$", s)) 		
-isid = lambda s : bool(re.match(r"^[A-Za-z][A-Za-z0-9_]*$", s)) 
+istemp = lambda s : bool(re.match(r"^t[0-9]*$", s))
+isid = lambda s : bool(re.match(r"^[A-Za-z][A-Za-z0-9_]*$", s))
 if len(sys.argv) == 2 :
     icg_file = str(sys.argv[1])
 elif len(sys.argv) == 3:
@@ -30,7 +30,7 @@ def eval_binary_expr(op1, oper, op2):
         return op1 or op2
     elif(oper=="&&"):
         return op1 and op2
-    
+
 def printICG(list_of_lines):
     for i in list_of_lines:
         print(i.strip())
@@ -105,7 +105,7 @@ def remove_dead_code(list_of_lines) :
     for line in list_of_lines :
         tokens = line.split()
         if len(tokens) >= 3 :
-            if istemp(tokens[2]) :	
+            if istemp(tokens[2]) :
                 useful_temps.add(tokens[2])
         if len(tokens) >= 2 :
             if istemp(tokens[1]) :
@@ -131,11 +131,11 @@ if __name__ == "__main__" :
         if(printContent):
             print('ICG: ')
             printICG(list_of_lines)
-            print("\n\n")   
+            print("\n\n")
             print('After Constant Propagation')
             constant_propagation()
             printICG(list_of_lines)
-            print("\n\n")          
+            print("\n\n")
             print('After Constant Folding: ')
             constant_folding(list_of_lines)
             printICG(list_of_lines)
