@@ -1,4 +1,4 @@
-# C-Modern Compiler Front-End & TAC Generator
+# Intermediate Code Generation for Compiler
 
 A robust, educational-focused compiler front-end for a modern subset of C. Built with **Flex** and **Bison**, this tool performs lexical analysis, syntax parsing, semantic validation, and generates Three-Address Code (TAC).
 
