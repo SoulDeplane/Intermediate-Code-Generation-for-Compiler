@@ -11,6 +11,7 @@
             --panel-bg: #242921;
             --accent: #c69d6d;
             --text-main: #e2e8e0;
+            --text-dim: #94a3b8;
             --border: #3a4235;
             --success: #81b29a;
         }
@@ -43,9 +44,15 @@
         header {
             grid-column: span 2;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            padding-bottom: 10px;
+            padding-bottom: 20px;
+            gap: 20px;
+        }
+
+        .header-line {
+            flex-grow: 1;
+            height: 1px;
+            background: var(--accent);
         }
 
         .logo {
@@ -53,6 +60,7 @@
             font-weight: 800;
             color: var(--accent);
             letter-spacing: -1px;
+            text-align: center;
         }
 
         .panel {
@@ -78,6 +86,55 @@
             justify-content: space-between;
         }
 
+        /* Tabs Styling */
+        .tabs-header {
+            padding: 0;
+            display: flex;
+            background: rgba(0, 0, 0, 0.2);
+            overflow-x: auto;
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: transparent;
+            color: var(--text-dim);
+            border: none;
+            border-radius: 0;
+            padding: 12px 10px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            white-space: nowrap;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.05);
+            transform: none;
+            opacity: 1;
+        }
+
+        .tab-btn.active {
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tab-content {
+            display: none;
+            flex-grow: 1;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .tab-content.active {
+            display: flex;
+        }
+
         textarea {
             flex-grow: 1;
             background: transparent;
@@ -92,8 +149,8 @@
         }
 
         textarea::placeholder {
-            color: #c69d6d;
-            opacity: 1;
+            color: var(--accent);
+            opacity: 0.7;
         }
 
         .controls {
@@ -114,11 +171,11 @@
             transition: transform 0.1s, opacity 0.2s;
         }
 
-        button:hover {
+        button:not(.tab-btn):hover {
             opacity: 0.9;
         }
 
-        button:active {
+        button:not(.tab-btn):active {
             transform: scale(0.97);
         }
 
@@ -131,13 +188,14 @@
         .btn-secondary:hover {
             background: rgba(255, 255, 255, 0.05);
             opacity: 1;
+            color: var(--text-main);
         }
 
         .output-container {
-            display: grid;
-            grid-template-rows: 1.5fr 1.5fr;
-            gap: 20px;
+            display: flex;
+            flex-direction: column;
             min-height: 0;
+            height: 100%;
         }
 
         pre {
@@ -151,16 +209,13 @@
         }
 
         .text-error {
-            color: #ef4444;
-        }
-
-        .status-success {
-            color: var(--success);
+            color: #ef4444 !important;
         }
 
         pre:empty::before {
             content: attr(placeholder);
-            color: #c69d6d;
+            color: var(--text-dim);
+            font-style: italic;
         }
 
         @media (max-width: 900px) {
@@ -179,9 +234,9 @@
 
     <div class="app-container">
         <header>
+            <div class="header-line"></div>
             <div class="logo">Intermediate Code Generation for Compiler</div>
-            <div style="flex-grow: 1; height: 1px; background: var(--border); margin: 0 20px;"></div>
-            <div id="runtime-clock" style="color: var(--text-dim); font-size: 0.9rem;">Ready</div>
+            <div class="header-line"></div>
         </header>
 
         <section class="panel">
@@ -197,14 +252,34 @@
         </section>
 
         <div class="output-container">
-            <section class="panel">
-                <div class="panel-header">Result (Errors or TAC)</div>
-                <pre id="resultOut" style="color: var(--accent);" placeholder="No result yet..."></pre>
-            </section>
+            <section class="panel" style="height: 100%;">
+                <div class="tabs-header">
+                    <button class="tab-btn active" data-tab="tac-tab">TAC & Errors</button>
+                    <button class="tab-btn" data-tab="tokens-tab">Lex Tokens</button>
+                    <button class="tab-btn" data-tab="tree-tab">Parser Tree</button>
+                    <button class="tab-btn" data-tab="symbol-tab">Symbol Table</button>
+                    <button class="tab-btn" data-tab="corrected-tab">Auto-Corrected</button>
+                </div>
 
-            <section class="panel">
-                <div class="panel-header">Auto-Corrected Code</div>
-                <pre id="correctedOut" style="color: var(--success);" placeholder="No corrections applied..."></pre>
+                <div class="tab-content active" id="tac-tab">
+                    <pre id="resultOut" style="color: var(--accent);" placeholder="TAC output or errors will appear here..."></pre>
+                </div>
+                
+                <div class="tab-content" id="tokens-tab">
+                    <pre id="tokensOut" placeholder="Lexical tokens will appear here..."></pre>
+                </div>
+
+                <div class="tab-content" id="tree-tab">
+                    <pre id="treeOut" placeholder="Abstract Syntax Tree will appear here..."></pre>
+                </div>
+
+                <div class="tab-content" id="symbol-tab">
+                    <pre id="symbolOut" placeholder="Symbol table data will appear here..."></pre>
+                </div>
+
+                <div class="tab-content" id="corrected-tab">
+                    <pre id="correctedOut" style="color: var(--success);" placeholder="Auto-corrected code will appear here..."></pre>
+                </div>
             </section>
         </div>
     </div>
@@ -212,26 +287,48 @@
     <script>
         const execBtn = document.getElementById('execBtn');
         const clearBtn = document.getElementById('clearBtn');
+        const userInput = document.getElementById('userInput');
+        
+        // Output elements
         const resultOut = document.getElementById('resultOut');
         const correctedOut = document.getElementById('correctedOut');
-        const userInput = document.getElementById('userInput');
-        const clock = document.getElementById('runtime-clock');
+        const tokensOut = document.getElementById('tokensOut');
+        const treeOut = document.getElementById('treeOut');
+        const symbolOut = document.getElementById('symbolOut');
 
-        function updateClock() {
-            clock.textContent = new Date().toLocaleTimeString();
-        }
-        setInterval(updateClock, 1000);
-        updateClock();
+        // Tab Switching Logic
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const tabContents = document.querySelectorAll('.tab-content');
 
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                // Remove active class from all buttons and contents
+                tabBtns.forEach(b => b.classList.remove('active'));
+                tabContents.forEach(c => c.classList.remove('active'));
+
+                // Add active class to clicked button and corresponding content
+                btn.classList.add('active');
+                document.getElementById(btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        // Execution Logic
         execBtn.addEventListener('click', async () => {
             const input = userInput.value;
+            
+            // Reset fields
             resultOut.textContent = '';
             correctedOut.textContent = '';
+            tokensOut.textContent = '';
+            treeOut.textContent = '';
+            symbolOut.textContent = '';
             resultOut.classList.remove('text-error');
 
             if (!input.trim()) {
                 resultOut.classList.add('text-error');
                 resultOut.textContent = 'Error: No input found.';
+                // Auto-switch to TAC/Errors tab on input error
+                document.querySelector('[data-tab="tac-tab"]').click();
                 return;
             }
 
@@ -244,36 +341,74 @@
                 const data = await response.json();
 
                 if (response.ok) {
+                    const correctedTabBtn = document.querySelector('[data-tab="corrected-tab"]');
+                    const initialErr = (data.initial_stderr || '').trim();
+                    const finalErr = (data.final_stderr || '').trim();
                     const tac = (data.tac || '').trim();
-                    const err = (data.stderr || '').trim();
+                    const hasCorr = !!data.has_corrections;
 
-                    if (tac && tac !== 'No TAC generated.') {
-                        resultOut.classList.remove('text-error');
-                        resultOut.style.color = 'var(--accent)';
-                        resultOut.textContent = tac;
-                    } else if (err) {
-                        resultOut.classList.add('text-error');
-                        resultOut.style.color = '';
-                        resultOut.textContent = err;
-                    } else {
-                        resultOut.classList.add('text-error');
-                        resultOut.textContent = 'No TAC generated.';
+                    // 1. Handle TAC and Errors Tab Display
+                    let displayContent = '';
+                    
+                    if (initialErr) {
+                        displayContent += '    --- Compiler Diagnostics ---\n' + initialErr + '\n\n';
                     }
+                    
+                    if (hasCorr) {
+                        displayContent += '    [SUCCESS] Auto-corrections applied successfully.\n\n';
+                    }
+                    
+                    if (tac && tac !== "No TAC generated.") {
+                        displayContent += '    --- Generated Optimized TAC ---\n' + tac;
+                    } else if (finalErr && !initialErr) {
+                        displayContent += '    --- Errors ---\n' + finalErr;
+                    }
+                    
+                    if (!displayContent) {
+                        displayContent = "No output or errors generated.";
+                    }
+                    
+                    resultOut.textContent = displayContent;
+                    
+                    // 2. Populate Other Tabs
+                    tokensOut.textContent = data.lex_tokens || 'No lexical tokens available.';
+                    treeOut.textContent = data.parser_tree || 'No parser tree available.';
+                    symbolOut.textContent = data.symbol_table || 'No symbol table available.';
+                    
+                    // 3. Handle Auto-Corrected Code
                     correctedOut.textContent = data.corrected_code || 'No corrections applied.';
+                    
+                    if (hasCorr) {
+                        correctedTabBtn.style.color = 'var(--success)';
+                        correctedTabBtn.textContent = 'Auto-Corrected *';
+                    } else {
+                        correctedTabBtn.style.color = '';
+                        correctedTabBtn.textContent = 'Auto-Corrected';
+                    }
+                    
+                    // Automatically switch to the Result tab
+                    document.querySelector('[data-tab="tac-tab"]').click();
+
                 } else {
                     resultOut.classList.add('text-error');
                     resultOut.textContent = `Error: ${data.stderr || 'Unknown server error.'}`;
+                    document.querySelector('[data-tab="tac-tab"]').click();
                 }
             } catch (err) {
                 resultOut.classList.add('text-error');
                 resultOut.textContent = `Network Error: ${err.message}`;
+                document.querySelector('[data-tab="tac-tab"]').click();
             }
         });
 
+        // Clear Logic
         clearBtn.addEventListener('click', () => {
             userInput.value = '';
             resultOut.textContent = '';
             correctedOut.textContent = '';
+            tokensOut.textContent = '';
+            treeOut.textContent = '';
+            symbolOut.textContent = '';
             resultOut.classList.remove('text-error');
         });
     </script>

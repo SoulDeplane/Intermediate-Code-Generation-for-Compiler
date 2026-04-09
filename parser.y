@@ -604,6 +604,7 @@ expression_statement : SEMICOLON {
 %%
 int main() {
     printf("Starting modern C parser...\n");
+    printf("\n--- Lexical Tokens ---\n");
     return yyparse();
 }
 
