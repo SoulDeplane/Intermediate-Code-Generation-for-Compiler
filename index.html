@@ -32,7 +32,7 @@
 
         .app-container {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 50% 50%;
             grid-template-rows: auto 1fr;
             gap: 20px;
             max-width: 1400px;
@@ -95,12 +95,13 @@
         }
 
         .tab-btn {
-            flex: 1;
+            flex: 1 1 0;
+            width: 0;
             background: transparent;
             color: var(--text-dim);
             border: none;
             border-radius: 0;
-            padding: 12px 10px;
+            padding: 12px 5px;
             font-size: 0.85rem;
             font-weight: 600;
             text-transform: uppercase;
