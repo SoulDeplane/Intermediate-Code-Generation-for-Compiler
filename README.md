@@ -1,95 +1,63 @@
 # Intermediate Code Generation for Compiler
 
-A robust, educational-focused compiler front-end for a modern subset of C. Built with **Flex** and **Bison**, this tool performs lexical analysis, syntax parsing, semantic validation, and generates Three-Address Code (TAC).
+A compiler front-end for a modern subset of C with a built-in auto-correction layer and a web UI for exploring every phase of compilation. Built with Flex, Bison, C, Python (Flask), and a small browser front-end.
 
-Designed as an **Educational Analyzer Tool**, it emphasizes plain-English error reporting to help beginners understand *why* their code is incorrect, bridging the gap between cryptic compiler faults and student learning.
-
----
-
-## 🚀 Features
-
-### 1. Lexical Analysis (Scanner)
-
-* **Comprehensive Support:** Tokenizes standard C constructs and modern additions (e.g., `_Generic`, `nullptr`, `bool`, `_Alignas`).
-* **Resilience:** Safely filters comments and whitespace while catching unterminated strings and illegal characters.
-
-### 2. Syntax Analysis & AST Generation
-
-* **Grammar Validation:** Parses expressions, declarations, loops (`for`, `while`), and conditionals (`if`).
-* **Abstract Syntax Tree (AST):** Dynamically builds and visualizes an AST for structural representation.
-* **Error Recovery:** Uses Bison's `error` token to gracefully skip malformed statements, allowing for multi-error reporting in a single pass.
-
-### 3. Semantic Validation (Educational Feedback)
-
-Includes a custom `[Friendly Compiler Notice]` system to guide novice programmers:
-
-* **Scope & Declaration:** Detects undeclared identifiers and prevents redeclarations within the same scope.
-* **Type Safety:** Warns against assigning decimals to integers to prevent silent data loss (truncation).
-* **Clean Code:** Identifies variables that are declared but never used.
-* **Logical Safety:** Blocks `void` variable declarations and intercepts division-by-zero.
-
-### 4. Intermediate Code Generation (TAC)
-
-* Generates **Three Address Code** for arithmetic, assignments, and control flow.
-* Implements label-based branching for loops and conditionals.
-* **Halt-on-Error:** Ensures TAC is only generated if the code passes all semantic checks.
+The pipeline is modular — lexer, parser/semantic, intermediate code generator, code corrector, and optimizer are each independent stages. The web UI runs them in sequence and surfaces every artifact (tokens, AST, symbol table, errors, auto-corrected source, optimized TAC) in a tabbed view.
 
 ---
 
-## 📂 Project Structure
+## Features
 
-* `lexer.l`: Flex source file containing regular expressions and tokenization rules.
-* `parser.y`: Bison file defining grammar, symbol table logic, and semantic checks.
-* `ast.h` / `inter_code_gen.c`: Logic for traversing the AST and translating nodes into TAC.
-* `Makefile`: Automates the build and clean processes.
+### Lexical Analysis
+Tokenizes the standard C keyword set plus modern additions (_Generic, _Alignas, _Atomic, nullptr, bool, etc.). Handles decimal, octal, hexadecimal, and floating-point literals including exponent and suffix forms. Skips line and block comments, and reports unterminated comments, unterminated strings, malformed character literals, malformed numbers, and illegal characters via the shared diagnostics system.
+
+### Syntax and Semantic Analysis
+Bison grammar covering declarations, expressions, control flow (if, while, for), function definitions with parameter lists, function calls with argument count and type checking, pointer/address-of/dereference, and return statements. Builds an Abstract Syntax Tree during parsing and prints it to stdout. Maintains a scoped symbol table with kind tracking (variable, function, parameter), declaration/use status, and an is_allocated flag for malloc/free pairing. Semantic checks include undeclared identifiers, redeclarations in the same scope, void variables, division by zero, type mismatches in initialization and assignment, unused-variable warnings, possible memory leaks, missing returns in non-void functions, unsafe APIs, and argument count and type mismatches against function signatures. Bison error tokens with plain-English messages let parsing continue past malformed declarations, expressions, and conditionals so multiple errors can be reported in a single pass.
+
+### Intermediate Code Generation
+Walks the AST and emits Three-Address Code for arithmetic, assignment, comparisons, function calls (param/call), array indexing, address-of/dereference, returns, and label-based control flow for if/while/for. Writes to icg.txt only if no errors were recorded.
+
+### Code Optimization
+Reads icg.txt and applies constant propagation, constant folding, and dead code elimination (the last is run twice for fixed-point convergence). Writes the result to optimized_icg.txt. With --print, prints the IR after every pass for inspection.
+
+### Auto-Correction Layer
+A second-pass corrector that catches the most common beginner mistakes before the analyzer ever sees them. Runs as a separate executable invoked by the web server. All replacements are token-aware (skipping string literals, character literals, and comments) and idempotent.
+
+Currently corrects: keyword typos (~40 entries), stdlib function typos (~60 entries), missing semicolons (parser-driven and locally detected), wrong terminator (trailing , or : in place of ;, with case/default/goto-label/initializer guards), missing # before include, missing .h on 16 standard headers, automatic #include injection when stdlib functions are used without their header (~70 functions tracked across stdio/stdlib/string/ctype/math/time), missing % in format specifiers (narrow rule guarded by surrounding context), unclosed " on a single line, unbalanced ) or ] when a call/index pattern is recognizable, smart quotes from paste-from-Word artifacts, void main → int main, missing int before main, and missing closing } at EOF.
+
+### Diagnostics System
+Single shared error pipeline used by every phase. Records phase, severity (warning/error/fatal), line, column, machine-readable code, human message, and a recovery hint. Supports a setjmp/longjmp fatal escape and prints a summary at end of compilation. The Flask server parses these structured records to drive the auto-correction step.
+
+### Web UI
+A Flask backend exposes /compile, which runs the analyzer on the user's source, runs the code corrector unconditionally (it is idempotent on clean code), re-runs the analyzer on the corrected source if it changed, runs the optimizer on the produced TAC, and returns lex tokens, AST, symbol table, raw diagnostics, corrected source, and optimized TAC as JSON. The browser front-end shows everything in five tabs: TAC & Errors, Lex Tokens, Parser Tree, Symbol Table, and Auto-Corrected. The Auto-Corrected tab is empty when no corrections were applied; otherwise it is highlighted with an asterisk.
 
 ---
 
-## 🛠️ Build and Execution
+## Build and Execution
 
 ### Prerequisites
+- Flex (Fast Lexical Analyzer Generator)
+- Bison (GNU Parser Generator)
+- GCC
+- Python 3 with Flask (only required for the web UI: pip install flask)
 
-* **Flex** (Fast Lexical Analyzer Generator)
-* **Bison** (GNU Parser Generator)
-* **GCC** (GNU Compiler Collection)
+### Build
+make — builds both analyzer.exe and code_correc.exe.
 
-### Quick Start
+### Run from the command line
+Pipe a C source file directly into the analyzer.
 
-1. **Build the Analyzer:**
-Use the provided Makefile to compile the project automatically.
-```bash
-make
+- Linux / macOS: ./analyzer < test_input.c
+- Windows PowerShell: Get-Content test_input.c | .\analyzer.exe
 
-```
+The analyzer prints lex tokens, AST, symbol table, and a diagnostics summary to stdout/stderr, and writes TAC to icg.txt if compilation succeeds. To then optimize: make optimize (runs python optimiser.py icg.txt --print).
 
+### Run the web UI
+make then python server.py, and open <http://127.0.0.1:5000>. Paste C code in the input pane and click Process Data.
 
-2. **Run the Compiler:**
-Feed a C source file into the generated executable.
-
-*On Windows (PowerShell):*
-```powershell
-Get-Content test_input.c | .\analyzer.exe
-
-```
-
-
-*On Linux/macOS:*
-```bash
-./analyzer < test_input.c
-
-```
-
-
-3. **Clean Build Files:**
-To remove generated C files, headers, and the executable:
-```bash
-make clean
-
-```
-
-
+### Clean
+make clean removes generated files (Flex/Bison output, executables, intermediate artifacts). The clean target uses Windows del; substitute rm -f on Linux/macOS.
 
 ---
 
-> **Note:** This tool is intended for educational purposes and covers a subset of the C language. It is not a replacement for production-grade compilers like GCC or Clang.
-
+> This tool is intended for educational use and covers a subset of C. It is not a replacement for production-grade compilers like GCC or Clang.
