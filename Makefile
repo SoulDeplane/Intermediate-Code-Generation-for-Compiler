@@ -5,8 +5,8 @@ CFLAGS = -Wall -Wno-int-conversion -Wno-implicit-function-declaration
 
 all: analyzer code_correc
 
-analyzer: lex.yy.c parser.tab.c inter_code_gen.c
-	$(CC) $(CFLAGS) lex.yy.c parser.tab.c inter_code_gen.c -o analyzer
+analyzer: lex.yy.c parser.tab.c inter_code_gen.c errors.c
+	$(CC) $(CFLAGS) lex.yy.c parser.tab.c inter_code_gen.c errors.c -o analyzer
 
 code_correc: code_correc.c
 	$(CC) $(CFLAGS) code_correc.c -o code_correc

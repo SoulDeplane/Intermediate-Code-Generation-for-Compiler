@@ -376,7 +376,7 @@
                     symbolOut.textContent = data.symbol_table || 'No symbol table available.';
                     
                     // 3. Handle Auto-Corrected Code
-                    correctedOut.textContent = data.corrected_code || 'No corrections applied.';
+                    correctedOut.textContent = hasCorr ? (data.corrected_code || '') : '';
                     
                     if (hasCorr) {
                         correctedTabBtn.style.color = 'var(--success)';

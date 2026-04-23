@@ -5,21 +5,24 @@
     #include <stdlib.h>
     #include <string.h>
     #include "parser.tab.h"
+    #include "errors.h"
     int lno = 1;
+    int colno = 1;
     void printdebug(const char* msg, char c);
+    #define YY_USER_ACTION colno += yyleng;
     #define RET(t) { printf("Token: %s | Text: %s\n", #t, yytext); return t; }
 %}
 
 %%
 "/*"   {BEGIN(COMMENT);}
-<COMMENT>\n {lno++;}
+<COMMENT>\n {lno++; colno = 1;}
 <COMMENT>.  ;
-<COMMENT><<EOF>> { printdebug("Unterminated comment. You forgot to close your comment with */", ' '); return 0; }
+<COMMENT><<EOF>> { error_log(ERR_PHASE_LEX, ERR_SEV_ERROR, lno, colno, "UNCLOSED_COMMENT", "Auto-close comment at EOF and stop scanning.", "Unterminated comment. Missing closing */."); return 0; }
 <COMMENT>"*/" {BEGIN(INITIAL);}
 [ \t\r]+  ;
-\n  {lno++;}
+\n  {lno++; colno = 1;}
 ^#.* ;
-\\\n {lno++;}
+\\\n {lno++; colno = 1;}
 "auto"     {RET(AUTO);}
 "break"    {RET(BREAK);}
 "case"     {RET(CASE);}
@@ -115,14 +118,16 @@
 "]"     {RET(RBRACK);}
 "."     {RET(DOT);}
 L?\"([^"\\\n]|\\.)*\"     { yylval.sval = strdup(yytext); RET(STRING_LITERAL); }
-L?\"([^"\\\n]|\\.)* { printdebug("Unterminated string. You forgot to close your quotes before the end of the line.", '\"'); }
+L?\"([^"\\\n]|\\.)* { error_log(ERR_PHASE_LEX, ERR_SEV_ERROR, lno, colno, "UNCLOSED_STRING", "Auto-close string at line end and continue.", "Unterminated string literal."); }
 L?'([^'\\\n]|\\.)+'       { yylval.sval = strdup(yytext); RET(CHAR_LITERAL); }
+L?'([^'\\\n]|\\.)*        { error_log(ERR_PHASE_LEX, ERR_SEV_ERROR, lno, colno, "MALFORMED_CHAR_LITERAL", "Drop malformed char literal and continue.", "Malformed or unterminated character literal."); }
 [a-zA-Z_][a-zA-Z0-9_]* { yylval.sval = strdup(yytext); RET(IDENTIFIER); }
+[0-9]+\.[0-9]*\.[0-9]*   { error_log(ERR_PHASE_LEX, ERR_SEV_ERROR, lno, colno, "MALFORMED_NUMBER", "Skip malformed number token.", "Malformed floating-point literal."); }
 0[xX][a-fA-F0-9]+[uUlL]* { yylval.ival = (int)strtol(yytext, NULL, 16); RET(NUMBER); }
 0[0-7]+[uUlL]* { yylval.ival = (int)strtol(yytext, NULL, 8); RET(NUMBER); }
 [0-9]+[uUlL]* { yylval.ival = atoi(yytext); RET(NUMBER); }
 [0-9]*\.[0-9]*([eE][+-]?[0-9]+)?[fFlL]?|([0-9]+\.)(f|F|l|L)? { yylval.fval = atof(yytext); RET(FLOAT_VALUE); }
 [0-9]+[eE][+-]?[0-9]+[fFlL]?            { yylval.fval = atof(yytext); RET(FLOAT_VALUE); }
 <<EOF>> { return 0; }
-.   { printf("Lexical Error at line %d: Unexpected character '%s'. Check if you have a typo.\n", lno, yytext); }
+.   { error_logf(ERR_PHASE_LEX, ERR_SEV_ERROR, lno, colno, "ILLEGAL_CHAR", "Drop illegal character and continue scanning.", "Unexpected character '%s'.", yytext); }
 %%

@@ -1,6 +1,8 @@
 #ifndef AST_H
 #define AST_H
 
+#define AST_ERROR_TOKEN "__error__"
+
 typedef struct Node {
     struct Node *left;
     struct Node *mid1;

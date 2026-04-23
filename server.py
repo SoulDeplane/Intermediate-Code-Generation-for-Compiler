@@ -54,35 +54,44 @@ def compile_code():
         initial_warnings = stderr
 
         errors_extracted = []
+        diag_re = re.compile(
+            r"^\[(?P<sev>warning|error|fatal)\]\[(?P<phase>[A-Z]+)\]\s+"
+            r"line=(?P<line>\d+)\s+col=(?P<col>\d+)\s+code=(?P<code>[A-Z_]+):\s+"
+            r"(?P<msg>.*?)(?:\s+\|\s+recovery:.*)?$"
+        )
+        seen_semicolon_lines = set()
         for line in stderr.splitlines():
-            if "Missing semicolon" in line and "at line " in line:
-                match = re.search(r"at line (\d+)", line)
-                if match:
-                    errors_extracted.append(f"MISSING_SEMICOLON {match.group(1)}")
+            m = diag_re.match(line.strip())
+            if not m:
+                continue
+            code = m.group("code")
+            msg = m.group("msg")
+            ln = int(m.group("line"))
+            if code == "PARSER_ERROR" and "Missing semicolon" in msg and ln not in seen_semicolon_lines:
+                seen_semicolon_lines.add(ln)
+                errors_extracted.append(f"MISSING_SEMICOLON {ln}")
 
         has_corrections = False
         corrected_code = ""
         stdout_final = stdout
         stderr_final = stderr
 
-        if errors_extracted:
-            with open("errors.txt", "w") as f:
-                f.write("\n".join(errors_extracted) + "\n")
+        with open("errors.txt", "w") as f:
+            f.write("\n".join(errors_extracted) + ("\n" if errors_extracted else ""))
 
-            subprocess.run(['code_correc.exe', 'temp_source.c', 'errors.txt', 'corrected_source.c'], capture_output=True, text=True, timeout=5)
+        subprocess.run(['code_correc.exe', 'temp_source.c', 'errors.txt', 'corrected_source.c'], capture_output=True, text=True, timeout=5)
 
-            if os.path.exists("corrected_source.c"):
-                with open("corrected_source.c", "r") as f:
-                    corrected_code = f.read()
-                
-                # Only mark as corrected if it's actually different from original (ignoring line endings)
-                if corrected_code.replace('\r', '').strip() != source_code.replace('\r', '').strip():
-                    has_corrections = True
-                    process_corrected = subprocess.run(['analyzer.exe'], input=corrected_code, text=True, capture_output=True, timeout=5)
-                    stdout_final = process_corrected.stdout
-                    stderr_final = process_corrected.stderr
-                else:
-                    corrected_code = ""
+        if os.path.exists("corrected_source.c"):
+            with open("corrected_source.c", "r") as f:
+                corrected_code = f.read()
+
+            if corrected_code.replace('\r', '').strip() != source_code.replace('\r', '').strip():
+                has_corrections = True
+                process_corrected = subprocess.run(['analyzer.exe'], input=corrected_code, text=True, capture_output=True, timeout=5)
+                stdout_final = process_corrected.stdout
+                stderr_final = process_corrected.stderr
+            else:
+                corrected_code = ""
 
         # Extract Sections from the FINAL run
         lex_tokens = extract_section(stdout_final, "--- Lexical Tokens ---", "---")

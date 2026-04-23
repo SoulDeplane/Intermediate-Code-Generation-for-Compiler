@@ -3,18 +3,41 @@
     #include <stdlib.h>
     #include <string.h>
     #include <limits.h>
+    #include <setjmp.h>
     #include "ast.h"
+    #include "errors.h"
 
     void yyerror(const char*);
     int yylex();
     extern FILE * yyin, *yyout;
     extern int lno;
+    extern int colno;
     FILE *icg_out = NULL;
 
     int scope = 0;
     int datatype = -1;
     char tempStr[100];
     int error_occurred = 0;
+    int current_function_return_type = -1;
+    int current_function_has_return = 0;
+    char current_function_name[20] = {0};
+    int current_insert_kind = 0;
+    #define SYM_KIND_VAR 0
+    #define SYM_KIND_FUNC 1
+    #define SYM_KIND_PARAM 2
+
+    #define MAX_PARAMS 32
+
+    typedef struct function_sig {
+        char name[20];
+        int return_type;
+        int param_count;
+        int param_types[MAX_PARAMS];
+        struct function_sig *next;
+    } function_sig;
+    function_sig *functions = NULL;
+    int pending_param_types[MAX_PARAMS];
+    int pending_param_count = 0;
 
     struct node {
         char name[20];
@@ -22,6 +45,7 @@
         int scope;
         int valid;
         int is_used;
+        int sym_kind;
         union value {
             float f;
             int i;
@@ -44,13 +68,32 @@
 
     void printAST(Node* root, int level);
     void clear_tree(Node* root);
+    static void* checked_calloc(size_t count, size_t size);
+    static struct node* new_semantic_node(int dtype, const char *name);
+    static Node* new_ast_node(const char *token);
+    static function_sig* lookup_function(const char *name);
+    static void upsert_function_signature(const char *name, int return_type, int param_count, int *param_types);
+    static const char* dtype_name(int dtype);
 %}
+
+%code requires {
+    #ifndef ARG_LIST_INFO_DECLARED
+    #define ARG_LIST_INFO_DECLARED
+    typedef struct arg_list_info {
+        int count;
+        int types[32];
+        int is_allocated[32];
+        char names[32][20];
+    } arg_list_info;
+    #endif
+}
 
 %union {
     int ival;
     float fval;
     char *sval;
     struct node *ptr;
+    arg_list_info *alist;
 }
 
 %token <sval> IDENTIFIER STRING_LITERAL CHAR_LITERAL
@@ -71,13 +114,14 @@
 %type <ptr> assignment_expression primary_expression equality_expression
 %type <ptr> relational_expression additive_expression multiplicative_expression
 %type <ptr> unary_expression conditional_expression expression expression_statement
-%type <ptr> postfix_expression argument_expression_list
+%type <ptr> postfix_expression
+%type <alist> argument_expression_list
 
 %start S
 
 %%
 S : program {
-    if(!error_occurred) {
+    if(!error_has_errors()) {
         printf("\n--- Intermediate Code (TAC) ---\n");
         if(tree_top != NULL) {
             icg_out = fopen("icg.txt", "w");
@@ -107,17 +151,23 @@ S : program {
     struct node *ftp = first;
     while(ftp != NULL) {
         if(ftp->valid == 1) {
-            if (ftp->is_used == 0) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+            if (ftp->is_used == 0 && ftp->sym_kind == SYM_KIND_VAR) {
+                error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "UNUSED_VARIABLE", "Continue with symbol table checks", "Variable '%s' is declared but never used.", ftp->name);
             }
             if (ftp->is_allocated == 1) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning: Memory leak detected! Variable '%s' was allocated but never freed before execution end.\n", ftp->name);
+                error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "LEAK_POSSIBLE", "Continue with leak advisory", "Memory leak detected. Variable '%s' was allocated but never freed before execution end.", ftp->name);
             }
         }
         ftp = ftp->link;
     }
     printsymtable();
     cleansymbol();
+    while (functions != NULL) {
+        function_sig *tmp = functions;
+        functions = functions->next;
+        free(tmp);
+    }
+    error_print_summary(stderr);
 }
 
 program : translation_unit ;
@@ -125,7 +175,22 @@ translation_unit : ext_dec | translation_unit ext_dec { create_node("stmt_seq", 
 ext_dec : declaration | function_definition | statement ;
 
 function_definition
-    : type_specifier IDENTIFIER { insert($2, datatype); } LPAREN parameter_list RPAREN compound_statement { create_node("func_def", 0); }
+    : type_specifier IDENTIFIER {
+        current_insert_kind = SYM_KIND_FUNC;
+        insert($2, datatype);
+        current_insert_kind = SYM_KIND_VAR;
+        current_function_return_type = datatype;
+        current_function_has_return = 0;
+        snprintf(current_function_name, sizeof(current_function_name), "%s", $2);
+        pending_param_count = 0;
+    } LPAREN parameter_list RPAREN compound_statement {
+        upsert_function_signature(current_function_name, current_function_return_type, pending_param_count, pending_param_types);
+        if (current_function_return_type != 3 && !current_function_has_return) {
+            error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "MISSING_RETURN", "Insert `return <value>;` in all non-void paths.", "Non-void function '%s' may reach end without returning a value.", current_function_name);
+            error_occurred = 1;
+        }
+        create_node("func_def", 0);
+    }
     ;
 
 parameter_list
@@ -135,8 +200,16 @@ parameter_list
     ;
 
 parameter_declaration : type_specifier IDENTIFIER {
+    current_insert_kind = SYM_KIND_PARAM;
     if (insert($2, datatype) == NULL) {
 
+    }
+    current_insert_kind = SYM_KIND_VAR;
+    if (pending_param_count < MAX_PARAMS) {
+        pending_param_types[pending_param_count++] = datatype;
+    } else {
+        error_log(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "TOO_MANY_PARAMS", "Only first 32 parameters are tracked for signature checks.", "Too many function parameters for signature checker.");
+        error_occurred = 1;
     }
 } ;
 
@@ -145,11 +218,11 @@ compound_statement
         struct node *ftp = first;
         while(ftp != NULL) {
             if(ftp->scope == scope && ftp->valid == 1) {
-                if (ftp->is_used == 0) {
-                    fprintf(stderr, "[Friendly Compiler Notice] Warning: Variable '%s' is declared but never used. Consider removing it to clean up your code.\n", ftp->name);
+                if (ftp->is_used == 0 && ftp->sym_kind == SYM_KIND_VAR) {
+                    error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "UNUSED_VARIABLE", "Scope cleanup continues", "Variable '%s' is declared but never used.", ftp->name);
                 }
                 if (ftp->is_allocated == 1) {
-                    fprintf(stderr, "[Friendly Compiler Notice] Warning: Memory leak detected! Variable '%s' was allocated but never freed before leaving scope.\n", ftp->name);
+                    error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "LEAK_POSSIBLE", "Scope cleanup continues", "Memory leak detected. Variable '%s' was allocated but never freed before leaving scope.", ftp->name);
                 }
                 ftp->valid = 0;
             }
@@ -163,16 +236,16 @@ compound_statement
 block_item_list : block_item | block_item_list block_item { create_node("stmt_seq", 0); } ;
 block_item : declaration | statement
     | RETURN expression SEMICOLON {
+        current_function_has_return = 1;
         Node* expr = pop_tree();
-        Node* retNode = (Node*)malloc(sizeof(Node));
-        strcpy(retNode->token, "return");
+        Node* retNode = new_ast_node("return");
         retNode->left = expr;
         retNode->right = NULL;
         push_tree(retNode);
     }
     | RETURN SEMICOLON {
-        Node* retNode = (Node*)malloc(sizeof(Node));
-        strcpy(retNode->token, "return");
+        current_function_has_return = 1;
+        Node* retNode = new_ast_node("return");
         retNode->left = NULL;
         retNode->right = NULL;
         push_tree(retNode);
@@ -181,8 +254,8 @@ block_item : declaration | statement
 
 declaration
     : type_specifier init_declarator_list SEMICOLON
-    | type_specifier init_declarator_list error { yyerror("Missing semicolon (;) after variable declaration."); yyerrok; }
-    | error init_declarator_list SEMICOLON { yyerror("Missing valid type specifier (int, float, etc) for declaration."); yyerrok; }
+    | type_specifier init_declarator_list error { yyerror("Missing semicolon (;) after variable declaration."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
+    | error init_declarator_list SEMICOLON { yyerror("Missing valid type specifier (int, float, etc) for declaration."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
     ;
 
 statement
@@ -190,22 +263,21 @@ statement
     | expression_statement
     | iteration_statement
     | condition_statement
-    | error SEMICOLON { yyerror("Invalid statement; please check your syntax before the semicolon."); yyerrok; }
-    | expression error { yyerror("Missing semicolon immediately following expression block."); yyerrok; }
+    | error SEMICOLON { yyerror("Invalid statement; please check your syntax before the semicolon."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
+    | expression error { yyerror("Missing semicolon immediately following expression block."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
     ;
 
 condition_statement
     : IF LPAREN relational_expression RPAREN statement {
         Node *stmt = pop_tree();
         Node *cond = pop_tree();
-        Node *ifnode = (Node*)malloc(sizeof(Node));
-        strcpy(ifnode->token, "if");
+        Node *ifnode = new_ast_node("if");
         ifnode->left = cond;
         ifnode->right = stmt;
         push_tree(ifnode);
     }
-    | IF error RPAREN statement { yyerror("Missing or malformed condition inside 'if'. Did you forget an opening '('?"); yyerrok; }
-    | IF LPAREN relational_expression error { yyerror("Missing closing ')' for 'if' condition."); yyerrok; }
+    | IF error RPAREN statement { yyerror("Missing or malformed condition inside 'if'. Did you forget an opening '('?"); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
+    | IF LPAREN relational_expression error { yyerror("Missing closing ')' for 'if' condition."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
     ;
 
 iteration_statement
@@ -214,26 +286,24 @@ iteration_statement
         Node *inc = pop_tree();
         Node *cond = pop_tree();
         Node *init = pop_tree();
-        Node *fornode = (Node*)malloc(sizeof(Node));
-        strcpy(fornode->token, "for");
+        Node *fornode = new_ast_node("for");
         fornode->left = init;
         fornode->mid1 = cond;
         fornode->mid2 = inc;
         fornode->right = stmt;
         push_tree(fornode);
     }
-    | FOR error statement { yyerror("Malformed 'for' loop declaration."); yyerrok; }
+    | FOR error statement { yyerror("Malformed 'for' loop declaration."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
     | WHILE LPAREN relational_expression RPAREN statement {
         Node *stmt = pop_tree();
         Node *cond = pop_tree();
-        Node *whilenode = (Node*)malloc(sizeof(Node));
-        strcpy(whilenode->token, "while");
+        Node *whilenode = new_ast_node("while");
         whilenode->left = cond;
         whilenode->right = stmt;
         push_tree(whilenode);
     }
-    | WHILE error RPAREN statement { yyerror("Missing or malformed condition inside 'while'. Did you forget an opening '('?"); yyerrok; }
-    | WHILE LPAREN relational_expression error { yyerror("Missing closing ')' for 'while' condition."); yyerrok; }
+    | WHILE error RPAREN statement { yyerror("Missing or malformed condition inside 'while'. Did you forget an opening '('?"); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
+    | WHILE LPAREN relational_expression error { yyerror("Missing closing ')' for 'while' condition."); create_node(AST_ERROR_TOKEN, 1); yyerrok; }
     ;
 
 type_specifier
@@ -258,9 +328,9 @@ init_declarator
         struct node* id_ptr = $<ptr>2;
         if (id_ptr) {
             if (id_ptr->dtype == 0 && $<ptr>4->dtype == 1) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value to the integer variable '%s'.\n", lno, id_ptr->name);
+                error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "IMPLICIT_TRUNCATION", "Assignment kept for recovery", "Possible loss of data while assigning decimal value to integer '%s'.", id_ptr->name);
             } else if ((id_ptr->dtype == 0 || id_ptr->dtype == 1) && ($<ptr>4->dtype == 2)) {
-                fprintf(stderr, "[Friendly Compiler Notice] Type Mismatch Error at line %d: Cannot initialize a numeric variable '%s' with a character.\n", lno, id_ptr->name);
+                error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "TYPE_MISMATCH_INIT", "Keep parsing with error placeholder.", "Cannot initialize numeric variable '%s' with a character.", id_ptr->name);
                 error_occurred = 1;
             } else if ((id_ptr->dtype == 0 || id_ptr->dtype == 1) && $<ptr>4->dtype == 4 && id_ptr->dtype != 4) {
 
@@ -337,44 +407,40 @@ primary_expression
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
 
-            struct node* dummy = (struct node*)malloc(sizeof(struct node));
-            dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+            struct node* dummy = new_semantic_node(0, "dummy");
+            dummy->val.i = 0;
             $$ = dummy;
             create_node("dummy", 1);
         } else {
             res->is_used = 1;
 
-            struct node* ret = (struct node*)malloc(sizeof(struct node));
+            struct node* ret = (struct node*)checked_calloc(1, sizeof(struct node));
             memcpy(ret, res, sizeof(struct node));
             $$ = ret;
             create_node(res->name, 1);
         }
     }
     | NUMBER {
-        struct node* num_node = (struct node*)malloc(sizeof(struct node));
-        num_node->dtype = 0;
+        struct node* num_node = new_semantic_node(0, "__number__");
         num_node->val.i = $1;
         $$ = num_node;
         sprintf(tempStr, "%d", $1);
         create_node(tempStr, 1);
     }
     | FLOAT_VALUE {
-        struct node* f_node = (struct node*)malloc(sizeof(struct node));
-        f_node->dtype = 1;
+        struct node* f_node = new_semantic_node(1, "__float__");
         f_node->val.f = $1;
         $$ = f_node;
         sprintf(tempStr, "%f", $1);
         create_node(tempStr, 1);
     }
     | STRING_LITERAL {
-        struct node* s_node = (struct node*)malloc(sizeof(struct node));
-        s_node->dtype = 4;
+        struct node* s_node = new_semantic_node(4, "__string__");
         $$ = s_node;
         create_node("string_lit", 1);
     }
     | CHAR_LITERAL {
-        struct node* c_node = (struct node*)malloc(sizeof(struct node));
-        c_node->dtype = 2;
+        struct node* c_node = new_semantic_node(2, "__char__");
         $$ = c_node;
         create_node("char_lit", 1);
     }
@@ -383,24 +449,33 @@ primary_expression
 
 argument_expression_list
     : assignment_expression {
+        arg_list_info *info = (arg_list_info*)checked_calloc(1, sizeof(arg_list_info));
+        info->count = 1;
+        info->types[0] = $1 ? $1->dtype : -1;
+        info->is_allocated[0] = ($1 ? $1->is_allocated : 0);
+        snprintf(info->names[0], sizeof(info->names[0]), "%s", ($1 && $1->name[0]) ? $1->name : "");
+
         Node* expr = pop_tree();
-        Node* paramNode = (Node*)malloc(sizeof(Node));
-        strcpy(paramNode->token, "param");
+        Node* paramNode = new_ast_node("param");
         paramNode->left = expr;
         paramNode->right = NULL;
         push_tree(paramNode);
-        $$ = $1;
+        $$ = info;
     }
     | argument_expression_list COMMA assignment_expression {
+        if ($1->count < MAX_PARAMS) {
+            $1->types[$1->count] = $3 ? $3->dtype : -1;
+            $1->is_allocated[$1->count] = ($3 ? $3->is_allocated : 0);
+            snprintf($1->names[$1->count], sizeof($1->names[$1->count]), "%s", ($3 && $3->name[0]) ? $3->name : "");
+            $1->count++;
+        }
         Node* expr = pop_tree();
         Node* list = pop_tree();
-        Node* paramNode = (Node*)malloc(sizeof(Node));
-        strcpy(paramNode->token, "param");
+        Node* paramNode = new_ast_node("param");
         paramNode->left = expr;
         paramNode->right = NULL;
 
-        Node* seq = (Node*)malloc(sizeof(Node));
-        strcpy(seq->token, "param_list");
+        Node* seq = new_ast_node("param_list");
         seq->left = list;
         seq->right = paramNode;
         push_tree(seq);
@@ -411,17 +486,21 @@ argument_expression_list
 postfix_expression
     : primary_expression
     | postfix_expression LBRACK expression RBRACK {
-        struct node* arr_node = (struct node*)malloc(sizeof(struct node));
-        arr_node->dtype = 0;
+        struct node* arr_node = new_semantic_node(0, "__array_item__");
         $$ = arr_node;
         create_node("[]", 0);
     }
     | IDENTIFIER LPAREN RPAREN {
         if (strcmp($1, "gets") == 0) {
-            fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: '%s' is unsafe; it can lead to buffer overflows. Consider using 'fgets' instead.\n", lno, $1);
+            error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "UNSAFE_API", "Call retained for analysis", "'%s' is unsafe and may lead to buffer overflows; use 'fgets' instead.", $1);
         }
 
         struct node* res = lookup($1);
+        function_sig *sig = lookup_function($1);
+        if (sig && sig->param_count != 0) {
+            error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "ARG_COUNT_MISMATCH", "Match call arguments to function signature.", "Function '%s' expects %d argument(s), but 0 provided.", $1, sig->param_count);
+            error_occurred = 1;
+        }
         if(!res &&
            strcmp($1, "gets") != 0 && strcmp($1, "malloc") != 0 && strcmp($1, "free") != 0 &&
            strcmp($1, "printf") != 0 && strcmp($1, "scanf") != 0) {
@@ -430,36 +509,46 @@ postfix_expression
             report_error(lno, errmsg);
         }
 
-        Node* callNode = (Node*)malloc(sizeof(Node));
-        strcpy(callNode->token, "call");
+        Node* callNode = new_ast_node("call");
 
-        Node* funcNode = (Node*)malloc(sizeof(Node));
-        strcpy(funcNode->token, $1);
+        Node* funcNode = new_ast_node($1);
         funcNode->left = funcNode->right = NULL;
 
         callNode->left = funcNode;
         callNode->right = NULL;
         push_tree(callNode);
 
-        struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        struct node* call_res = new_semantic_node(0, "__call__");
         if (strcmp($1, "malloc") == 0) strcpy(call_res->name, "__malloc__");
-        call_res->dtype = 0;
         $$ = call_res;
     }
     | IDENTIFIER LPAREN argument_expression_list RPAREN {
         if (strcmp($1, "gets") == 0) {
-            fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: '%s' is unsafe; it can lead to buffer overflows. Consider using 'fgets' instead.\n", lno, $1);
+            error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "UNSAFE_API", "Call retained for analysis", "'%s' is unsafe and may lead to buffer overflows; use 'fgets' instead.", $1);
         }
 
         if (strcmp($1, "free") == 0) {
-            if ($3 && $3->is_allocated == 1) {
-
-                struct node* free_target = lookup($3->name);
+            if ($3 && $3->count == 1 && $3->is_allocated[0] == 1) {
+                struct node* free_target = lookup($3->names[0]);
                 if (free_target) free_target->is_allocated = 0;
             }
         }
 
         struct node* res = lookup($1);
+        function_sig *sig = lookup_function($1);
+        if (sig) {
+            if (sig->param_count != $3->count) {
+                error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "ARG_COUNT_MISMATCH", "Match call arguments to function signature.", "Function '%s' expects %d argument(s), but %d provided.", $1, sig->param_count, $3->count);
+                error_occurred = 1;
+            } else {
+                for (int i = 0; i < sig->param_count; i++) {
+                    if ($3->types[i] >= 0 && sig->param_types[i] != $3->types[i]) {
+                        error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "ARG_TYPE_MISMATCH", "Adjust argument type or function parameter type.", "Argument %d of '%s' expects type %s, but got %s.", i + 1, $1, dtype_name(sig->param_types[i]), dtype_name($3->types[i]));
+                        error_occurred = 1;
+                    }
+                }
+            }
+        }
         if(!res &&
            strcmp($1, "gets") != 0 && strcmp($1, "malloc") != 0 && strcmp($1, "free") != 0 &&
            strcmp($1, "printf") != 0 && strcmp($1, "scanf") != 0) {
@@ -468,46 +557,40 @@ postfix_expression
             report_error(lno, errmsg);
         }
         Node* args = pop_tree();
-        Node* callNode = (Node*)malloc(sizeof(Node));
-        strcpy(callNode->token, "call");
+        Node* callNode = new_ast_node("call");
 
-        Node* funcNode = (Node*)malloc(sizeof(Node));
-        strcpy(funcNode->token, $1);
+        Node* funcNode = new_ast_node($1);
         funcNode->left = funcNode->right = NULL;
 
         callNode->left = funcNode;
         callNode->right = args;
         push_tree(callNode);
 
-        struct node* call_res = (struct node*)malloc(sizeof(struct node));
+        struct node* call_res = new_semantic_node(0, "__call__");
         if (strcmp($1, "malloc") == 0) strcpy(call_res->name, "__malloc__");
-        call_res->dtype = 0;
         $$ = call_res;
+        free($3);
     }
     ;
 
 unary_expression
     : postfix_expression
     | BIT_AND unary_expression {
-         struct node* res = (struct node*)malloc(sizeof(struct node));
-         res->dtype = 4;
+         struct node* res = new_semantic_node(4, "__addr__");
          $$ = res;
 
          Node* operand = pop_tree();
-         Node* opNode = (Node*)malloc(sizeof(Node));
-         strcpy(opNode->token, "addr");
+         Node* opNode = new_ast_node("addr");
          opNode->left = operand;
          opNode->right = NULL;
          push_tree(opNode);
     }
     | MULT unary_expression {
-         struct node* res = (struct node*)malloc(sizeof(struct node));
-         res->dtype = 4;
+         struct node* res = new_semantic_node(4, "__deref__");
          $$ = res;
 
          Node* operand = pop_tree();
-         Node* opNode = (Node*)malloc(sizeof(Node));
-         strcpy(opNode->token, "deref");
+         Node* opNode = new_ast_node("deref");
          opNode->left = operand;
          opNode->right = NULL;
          push_tree(opNode);
@@ -518,7 +601,7 @@ multiplicative_expression
     : unary_expression
     | multiplicative_expression MULT unary_expression {
         if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot perform multiplication on strings or characters."); }
-        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("*", 0);
+        $$ = new_semantic_node(0, "__mul__"); create_node("*", 0);
     }
     | multiplicative_expression DIV unary_expression {
         if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot perform division on strings or characters."); }
@@ -526,11 +609,11 @@ multiplicative_expression
         if(rhs == 0.0) {
             report_error(lno, "Division by zero");
         }
-        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("/", 0);
+        $$ = new_semantic_node(0, "__div__"); create_node("/", 0);
     }
     | multiplicative_expression MOD unary_expression {
         if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot modulo strings or characters."); }
-        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("%", 0);
+        $$ = new_semantic_node(0, "__mod__"); create_node("%", 0);
     }
     ;
 
@@ -538,22 +621,22 @@ additive_expression
     : multiplicative_expression
     | additive_expression PLUS multiplicative_expression {
         if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot explicitly add strings or characters."); }
-        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("+", 0);
+        $$ = new_semantic_node(0, "__add__"); create_node("+", 0);
     }
     | additive_expression MINUS multiplicative_expression {
         if (($1->dtype == 4 || $1->dtype == 2) || ($3->dtype == 4 || $3->dtype == 2)) { report_error(lno, "Type mismatch! Cannot explicitly subtract strings or characters."); }
-        $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("-", 0);
+        $$ = new_semantic_node(0, "__sub__"); create_node("-", 0);
     }
     ;
 
 relational_expression
     : additive_expression
-    | relational_expression LE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("<=", 0); }
-    | relational_expression GE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node(">=", 0); }
-    | relational_expression LT additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("<", 0); }
-    | relational_expression GT additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node(">", 0); }
-    | relational_expression EQ additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("==", 0); }
-    | relational_expression NE additive_expression { $$ = (struct node*)malloc(sizeof(struct node)); $$->dtype = 0; create_node("!=", 0); }
+    | relational_expression LE additive_expression { $$ = new_semantic_node(0, "__le__"); create_node("<=", 0); }
+    | relational_expression GE additive_expression { $$ = new_semantic_node(0, "__ge__"); create_node(">=", 0); }
+    | relational_expression LT additive_expression { $$ = new_semantic_node(0, "__lt__"); create_node("<", 0); }
+    | relational_expression GT additive_expression { $$ = new_semantic_node(0, "__gt__"); create_node(">", 0); }
+    | relational_expression EQ additive_expression { $$ = new_semantic_node(0, "__eq__"); create_node("==", 0); }
+    | relational_expression NE additive_expression { $$ = new_semantic_node(0, "__ne__"); create_node("!=", 0); }
     ;
 
 equality_expression : relational_expression ;
@@ -567,22 +650,22 @@ assignment_expression
             sprintf(errmsg, "Undeclared identifier %s", $1);
             report_error(lno, errmsg);
 
-            struct node* dummy = (struct node*)malloc(sizeof(struct node));
-            dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+            struct node* dummy = new_semantic_node(0, "dummy");
+            dummy->val.i = 0;
             $$ = dummy;
         } else {
             if (res->dtype == 0 && $4->dtype == 1) {
-                fprintf(stderr, "[Friendly Compiler Notice] Warning at line %d: Possible loss of data. You are assigning a decimal value to the integer variable '%s'.\n", lno, res->name);
+                error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "IMPLICIT_TRUNCATION", "Assignment kept for recovery", "Possible loss of data while assigning decimal value to integer '%s'.", res->name);
             } else if ((res->dtype == 0 || res->dtype == 1) && ($4->dtype == 2)) {
-                fprintf(stderr, "[Friendly Compiler Notice] Type Mismatch Error at line %d: Cannot assign a character to a numeric variable '%s'.\n", lno, res->name);
+                error_logf(ERR_PHASE_SEM, ERR_SEV_ERROR, lno, 0, "TYPE_MISMATCH_ASSIGN", "Keep parsing with error placeholder.", "Cannot assign character to numeric variable '%s'.", res->name);
                 error_occurred = 1;
             } else if ((res->dtype == 0 || res->dtype == 1) && $4->dtype == 4 && res->dtype != 4) {
 
             }
-            if (strcmp($4->name, "__malloc__") == 0) {
+            if ($4 && strcmp($4->name, "__malloc__") == 0) {
                 res->is_allocated = 1;
             }
-            if ($4->is_allocated == 1 && strcmp($4->name, res->name) != 0) {
+            if ($4 && $4->is_allocated == 1 && strcmp($4->name, res->name) != 0) {
 
                 res->is_allocated = 1;
             }
@@ -596,25 +679,102 @@ assignment_expression
     ;
 expression : assignment_expression ;
 expression_statement : SEMICOLON {
-    struct node* dummy = (struct node*)malloc(sizeof(struct node));
-    dummy->dtype = 0; dummy->val.i = 0; strcpy(dummy->name, "dummy");
+    struct node* dummy = new_semantic_node(0, "dummy");
+    dummy->val.i = 0;
     $$ = dummy;
 } | expression SEMICOLON { $$ = $1; };
 
 %%
 int main() {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    jmp_buf fatal_env;
+    error_reset_all();
+    error_set_fatal_jmp(&fatal_env);
+    if (setjmp(fatal_env) != 0) {
+        fprintf(stderr, "[fatal][SYS] line=%d col=0 code=ABORTED: Compilation aborted due to fatal diagnostics.\n", lno);
+        return EXIT_FAILURE;
+    }
+
     printf("Starting modern C parser...\n");
     printf("\n--- Lexical Tokens ---\n");
-    return yyparse();
+    int parse_status = yyparse();
+    if (parse_status != 0 && !error_has_errors()) {
+        report_error(lno, "Parsing failed due to unrecoverable syntax errors.");
+    }
+    return parse_status;
+}
+
+static void* checked_calloc(size_t count, size_t size) {
+    void *ptr = calloc(count, size);
+    if (!ptr) {
+        error_log(ERR_PHASE_SYS, ERR_SEV_FATAL, lno, 0, "OOM_ALLOC", "Abort compilation.", "Out of memory while compiling.");
+        exit(EXIT_FAILURE);
+    }
+    return ptr;
+}
+
+static struct node* new_semantic_node(int dtype, const char *name) {
+    struct node* n = (struct node*)checked_calloc(1, sizeof(struct node));
+    n->dtype = dtype;
+    if (name && name[0] != '\0') {
+        snprintf(n->name, sizeof(n->name), "%s", name);
+    } else {
+        snprintf(n->name, sizeof(n->name), "%s", "__tmp__");
+    }
+    return n;
+}
+
+static Node* new_ast_node(const char *token) {
+    Node* n = (Node*)checked_calloc(1, sizeof(Node));
+    if (token) {
+        snprintf(n->token, sizeof(n->token), "%s", token);
+    }
+    return n;
+}
+
+static function_sig* lookup_function(const char *name) {
+    function_sig *p = functions;
+    while (p) {
+        if (strcmp(p->name, name) == 0) return p;
+        p = p->next;
+    }
+    return NULL;
+}
+
+static void upsert_function_signature(const char *name, int return_type, int param_count, int *param_types) {
+    function_sig *sig = lookup_function(name);
+    if (!sig) {
+        sig = (function_sig*)checked_calloc(1, sizeof(function_sig));
+        snprintf(sig->name, sizeof(sig->name), "%s", name);
+        sig->next = functions;
+        functions = sig;
+    }
+    sig->return_type = return_type;
+    sig->param_count = (param_count > MAX_PARAMS) ? MAX_PARAMS : param_count;
+    for (int i = 0; i < sig->param_count; i++) {
+        sig->param_types[i] = param_types[i];
+    }
+}
+
+static const char* dtype_name(int dtype) {
+    switch (dtype) {
+        case 0: return "int";
+        case 1: return "float";
+        case 2: return "char";
+        case 3: return "void";
+        case 4: return "pointer/string";
+        default: return "unknown";
+    }
 }
 
 void report_error(int line, const char* msg) {
     if(!error_occurred) error_occurred = 1;
-    fprintf(stderr, "[Friendly Compiler Notice] Error at line %d: %s\n", line, msg);
+    error_log(ERR_PHASE_SYN, ERR_SEV_ERROR, line, colno, "PARSER_ERROR", msg, "Panic mode recovery attempted.");
 }
 
 void yyerror(const char* s) {
-    report_error(lno, s);
+    report_error(lno, (s && s[0] != '\0') ? s : "Syntax error");
 }
 
 void printdebug(const char* msg, char c) {
@@ -648,12 +808,13 @@ struct node* insert(char *name, int type) {
         }
         ptr = ptr->link;
     }
-    struct node *newnode = (struct node*)malloc(sizeof(struct node));
-    strcpy(newnode->name, name);
+    struct node *newnode = (struct node*)checked_calloc(1, sizeof(struct node));
+    snprintf(newnode->name, sizeof(newnode->name), "%s", name);
     newnode->dtype = type;
     newnode->scope = scope;
     newnode->valid = 1;
     newnode->is_used = 0;
+    newnode->sym_kind = current_insert_kind;
     newnode->is_allocated = 0;
     newnode->link = first;
     first = newnode;
@@ -681,7 +842,8 @@ void cleansymbol() {
 }
 
 void push_tree(Node *newnode) {
-    tree_stack *temp = (tree_stack*)malloc(sizeof(tree_stack));
+    if (!newnode) return;
+    tree_stack *temp = (tree_stack*)checked_calloc(1, sizeof(tree_stack));
     temp->node = newnode;
     temp->next = tree_top;
     tree_top = temp;
@@ -697,15 +859,14 @@ Node *pop_tree() {
 }
 
 void create_node(char *token, int leaf) {
-    Node *newnode = (Node*)malloc(sizeof(Node));
-    strcpy(newnode->token, token);
-    newnode->mid1 = NULL;
-    newnode->mid2 = NULL;
+    Node *newnode = new_ast_node(token);
     if (leaf) {
         newnode->left = newnode->right = NULL;
     } else {
         newnode->right = pop_tree();
         newnode->left = pop_tree();
+        if (!newnode->left) newnode->left = new_ast_node(AST_ERROR_TOKEN);
+        if (!newnode->right) newnode->right = new_ast_node(AST_ERROR_TOKEN);
     }
 
     newnode->eval_type = tree_top && tree_top->node ? tree_top->node->eval_type : 0;
@@ -713,7 +874,7 @@ void create_node(char *token, int leaf) {
 }
 
 void printAST(Node* root, int level) {
-    if (root == NULL || strcmp(root->token, "dummy") == 0) return;
+    if (root == NULL || strcmp(root->token, "dummy") == 0 || strcmp(root->token, AST_ERROR_TOKEN) == 0) return;
     for (int i = 0; i < level; i++) printf("  ");
     printf("-> %s\n", root->token);
     printAST(root->left, level + 1);
