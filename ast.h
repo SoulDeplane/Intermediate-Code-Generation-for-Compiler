@@ -18,6 +18,5 @@ void push_tree(Node *newnode);
 Node *pop_tree();
 void generate_ICG(Node* root);
 void report_error(int line, const char* msg);
-void printAST(Node* root, int level);
 void clear_tree(Node* root);
 #endif
