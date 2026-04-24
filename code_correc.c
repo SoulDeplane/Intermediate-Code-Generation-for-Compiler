@@ -6,18 +6,6 @@
 #define MAX_LINES 1000
 #define MAX_LEN 500
 
-typedef enum {
-    ERR_MISSING_SEMICOLON,
-    ERR_UNUSED_VARIABLE,
-    ERR_UNDECLARED_VARIABLE
-} ErrorType;
-
-typedef struct {
-    ErrorType type;
-    int line;
-    char symbol[50];
-} CompilerError;
-
 char source_code[MAX_LINES][MAX_LEN];
 int total_lines = 0;
 
@@ -29,7 +17,6 @@ static void apply_typo_table_to_line(int line_idx);
 static void detect_and_fix_missing_semicolons_local(void);
 static void fix_unbalanced_parens_at_eol(int line_idx);
 static void normalize_smart_quotes(int line_idx);
-static void fix_void_main(int line_idx);
 static void fix_wrong_terminator(int line_idx);
 static void fix_format_string_missing_percent(int line_idx);
 static void fix_unclosed_string_literal(int line_idx);
@@ -37,6 +24,10 @@ static void inject_missing_headers(void);
 static int  line_uses_identifier(const char *line, const char *ident);
 static int  file_has_include(const char *header_basename);
 static void prepend_line(const char *text);
+static void inject_default_declaration(const char *name);
+static int  identifier_is_declared_anywhere(const char *name);
+static void ensure_main_returns(void);
+static int  find_main_open_brace_line(void);
 
 void load_source_code(const char *filename) {
     FILE *fp = fopen(filename, "r");
@@ -203,24 +194,6 @@ void fix_missing_semicolon(int line) {
     }
 }
 
-void remove_unused_variable(const char *symbol) {
-
-    for (int i = 0; i < total_lines; i++) {
-        char *pos = strstr(source_code[i], symbol);
-        if (pos) {
-
-            int is_start = (pos == source_code[i] || (!isalnum(*(pos - 1)) && *(pos - 1) != '_'));
-            int is_end = (!isalnum(*(pos + strlen(symbol))) && *(pos + strlen(symbol)) != '_');
-            if (is_start && is_end) {
-
-                char temp[MAX_LEN];
-                snprintf(temp, sizeof(temp), " ");
-                strncpy(source_code[i], temp, MAX_LEN - 1);
-            }
-        }
-    }
-}
-
 static int is_ident_char(int c) {
     return isalnum((unsigned char)c) || c == '_';
 }
@@ -268,8 +241,6 @@ static void apply_heuristic_fixes() {
         replace_identifier_safe(source_code[i], "print", "printf");
 
         apply_typo_table_to_line(i);
-
-        fix_void_main(i);
 
         fix_format_string_missing_percent(i);
         fix_wrong_terminator(i);
@@ -437,16 +408,13 @@ static void replace_identifier_safe(char *line, const char *from, const char *to
 static void apply_typo_table_to_line(int line_idx) {
     if (line_idx < 0 || line_idx >= total_lines) return;
     static const struct { const char *from; const char *to; } typo_table[] = {
-        /* keyword: int / float / double / char / void */
         {"itn", "int"}, {"nit", "int"}, {"inta", "int"},
         {"flot", "float"}, {"flaot", "float"}, {"foat", "float"}, {"flaot", "float"},
         {"doulbe", "double"}, {"doble", "double"}, {"duoble", "double"},
         {"chra", "char"}, {"cahr", "char"}, {"chr", "char"},
         {"voi", "void"}, {"vod", "void"}, {"viod", "void"}, {"vid", "void"},
-        /* keyword: return */
         {"retrun", "return"}, {"reutrn", "return"}, {"retun", "return"},
         {"ruturn", "return"}, {"retrn", "return"}, {"retunr", "return"},
-        /* keyword: control flow */
         {"whlie", "while"}, {"whiel", "while"}, {"wile", "while"}, {"whle", "while"},
         {"fro", "for"}, {"ofr", "for"},
         {"esle", "else"}, {"eles", "else"}, {"els", "else"},
@@ -456,7 +424,6 @@ static void apply_typo_table_to_line(int line_idx) {
         {"caes", "case"}, {"csae", "case"},
         {"defualt", "default"}, {"deafult", "default"}, {"defalt", "default"},
         {"goot", "goto"}, {"gooto", "goto"},
-        /* keyword: type qualifiers / structural */
         {"strcut", "struct"}, {"sturct", "struct"}, {"strut", "struct"},
         {"unoin", "union"}, {"uinon", "union"},
         {"typdef", "typedef"}, {"tyepdef", "typedef"}, {"typedf", "typedef"},
@@ -468,7 +435,6 @@ static void apply_typo_table_to_line(int line_idx) {
         {"shrot", "short"}, {"shotr", "short"},
         {"singed", "signed"}, {"sigend", "signed"},
         {"unsinged", "unsigned"}, {"unisgned", "unsigned"},
-        /* stdio */
         {"pintf", "printf"}, {"prinft", "printf"}, {"printff", "printf"},
         {"prnitf", "printf"}, {"primtf", "printf"}, {"prinf", "printf"},
         {"pirntf", "printf"}, {"pirnt", "printf"},
@@ -485,14 +451,12 @@ static void apply_typo_table_to_line(int line_idx) {
         {"getss", "gets"}, {"putts", "puts"},
         {"getcahr", "getchar"}, {"getchr", "getchar"},
         {"putcahr", "putchar"}, {"putchr", "putchar"},
-        /* stdlib */
         {"mallo", "malloc"}, {"malooc", "malloc"}, {"mallock", "malloc"}, {"mallcoc", "malloc"},
         {"callco", "calloc"}, {"callcoc", "calloc"}, {"clloc", "calloc"},
         {"relaloc", "realloc"}, {"raelloc", "realloc"}, {"reaaloc", "realloc"},
         {"fre", "free"}, {"freee", "free"},
         {"exti", "exit"}, {"exitt", "exit"},
         {"atio", "atoi"}, {"atfo", "atof"},
-        /* string.h */
         {"strln", "strlen"}, {"srtlen", "strlen"}, {"strlne", "strlen"},
         {"srtcpy", "strcpy"}, {"strcyp", "strcpy"}, {"strcpyy", "strcpy"},
         {"srtncpy", "strncpy"}, {"strncyp", "strncpy"},
@@ -504,22 +468,37 @@ static void apply_typo_table_to_line(int line_idx) {
         {"srtstr", "strstr"}, {"strsrt", "strstr"},
         {"memcyp", "memcpy"}, {"memcpyy", "memcpy"}, {"memcyy", "memcpy"},
         {"memste", "memset"}, {"memsett", "memset"}, {"memsst", "memset"},
-        /* ctype.h */
         {"isaplha", "isalpha"}, {"isalpa", "isalpha"},
         {"isdigt", "isdigit"}, {"isidigit", "isdigit"},
         {"isspce", "isspace"}, {"issapce", "isspace"},
         {"isalnumm", "isalnum"}, {"isaplnum", "isalnum"},
         {"toupepr", "toupper"}, {"toupr", "toupper"},
         {"tolwoer", "tolower"}, {"tolwer", "tolower"},
-        /* math.h */
         {"powr", "pow"}, {"poww", "pow"},
         {"sqrtt", "sqrt"}, {"sqart", "sqrt"}, {"sqret", "sqrt"},
         {"fabss", "fabs"}, {"fbas", "fabs"},
+        {"indlue", "include"}, {"inculde", "include"}, {"incldue", "include"},
+        {"inlcude", "include"}, {"iclude", "include"}, {"incude", "include"},
+        {"icnlude", "include"}, {"inclue", "include"}, {"includ", "include"},
+        {"imclude", "include"}, {"inclde", "include"}, {"ncldue", "include"},
         {NULL, NULL}
     };
     for (int k = 0; typo_table[k].from != NULL; k++) {
         replace_identifier_safe(source_code[line_idx], typo_table[k].from, typo_table[k].to);
     }
+}
+
+static int next_nonblank_starts_with_brace(int i) {
+    for (int j = i + 1; j < total_lines; j++) {
+        char buf[MAX_LEN];
+        strncpy(buf, source_code[j], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *p = ltrim(buf);
+        trim_trailing_whitespace(p);
+        if (*p == '\0') continue;
+        return *p == '{';
+    }
+    return 0;
 }
 
 static void detect_and_fix_missing_semicolons_local(void) {
@@ -528,6 +507,7 @@ static void detect_and_fix_missing_semicolons_local(void) {
         trim_trailing_whitespace(source_code[i]);
         size_t len = strlen(source_code[i]);
         if (len == 0 || source_code[i][len - 1] == ';') continue;
+        if (source_code[i][len - 1] == ')' && next_nonblank_starts_with_brace(i)) continue;
         if (len + 2 < MAX_LEN) {
             strcat(source_code[i], ";\n");
         }
@@ -623,30 +603,6 @@ static void normalize_smart_quotes(int line_idx) {
     }
     out[oi] = '\0';
     strncpy(source_code[line_idx], out, MAX_LEN - 1);
-    source_code[line_idx][MAX_LEN - 1] = '\0';
-}
-
-static void fix_void_main(int line_idx) {
-    if (line_idx < 0 || line_idx >= total_lines) return;
-    char *line = source_code[line_idx];
-    if (!line || !*line) return;
-    char *p = line;
-    while (*p && isspace((unsigned char)*p)) p++;
-    if (strncmp(p, "void", 4) != 0) return;
-    char *q = p + 4;
-    if (!isspace((unsigned char)*q)) return;
-    while (*q && isspace((unsigned char)*q)) q++;
-    if (strncmp(q, "main", 4) != 0) return;
-    char *r = q + 4;
-    while (*r && isspace((unsigned char)*r)) r++;
-    if (*r != '(') return;
-
-    char buf[MAX_LEN];
-    size_t lead = (size_t)(p - line);
-    size_t tail_off = (size_t)(q - line);
-    snprintf(buf, sizeof(buf), "%.*sint %s",
-             (int)lead, line, line + tail_off);
-    strncpy(source_code[line_idx], buf, MAX_LEN - 1);
     source_code[line_idx][MAX_LEN - 1] = '\0';
 }
 
@@ -759,35 +715,44 @@ static void fix_format_string_missing_percent(int line_idx) {
     char out[MAX_LEN];
     size_t oi = 0;
     int in_str = 0, in_chr = 0, esc = 0;
+    char prev_in_str = 0;
     size_t i = 0;
     while (i < n && oi + 1 < sizeof(out)) {
         char c = line[i];
-        if (esc) { out[oi++] = c; i++; esc = 0; continue; }
-        if ((in_str || in_chr) && c == '\\') { out[oi++] = c; i++; esc = 1; continue; }
-        if (!in_chr && c == '"')  { in_str = !in_str; out[oi++] = c; i++; continue; }
+        if (esc) { out[oi++] = c; i++; esc = 0; prev_in_str = c; continue; }
+        if ((in_str || in_chr) && c == '\\') { out[oi++] = c; i++; esc = 1; prev_in_str = c; continue; }
+        if (!in_chr && c == '"')  {
+            int opening = !in_str;
+            in_str = !in_str;
+            out[oi++] = c; i++;
+            if (opening) prev_in_str = '"';
+            continue;
+        }
         if (!in_str && c == '\'') { in_chr = !in_chr; out[oi++] = c; i++; continue; }
 
-        if (in_str && c == ' ') {
+        if (in_str) {
             size_t adv = 0;
-            if (looks_like_format_letter(line, n, i + 1, &adv)) {
-                size_t after = i + 1 + adv;
+            int prev_ok = (prev_in_str == '"' || prev_in_str == ' ' ||
+                           prev_in_str == ':' || prev_in_str == '=' ||
+                           prev_in_str == ',' || prev_in_str == '\t');
+            if (prev_ok && looks_like_format_letter(line, n, i, &adv)) {
+                size_t after = i + adv;
                 int follow_ok = 0;
                 if (after < n) {
                     if (line[after] == '"') follow_ok = 1;
                     else if (line[after] == '\\' && after + 1 < n &&
                              (line[after+1] == 'n' || line[after+1] == 't')) follow_ok = 1;
-                    else if (line[after] == ' ') follow_ok = 1;
+                    else if (line[after] == ' ' || line[after] == '\t') follow_ok = 1;
                 }
-                if (follow_ok) {
-                    if (oi + 2 + adv < sizeof(out)) {
-                        out[oi++] = ' ';
-                        out[oi++] = '%';
-                        for (size_t k = 0; k < adv; k++) out[oi++] = line[i + 1 + k];
-                        i = i + 1 + adv;
-                        continue;
-                    }
+                if (follow_ok && oi + 1 + adv < sizeof(out)) {
+                    out[oi++] = '%';
+                    for (size_t k = 0; k < adv; k++) out[oi++] = line[i + k];
+                    i += adv;
+                    prev_in_str = line[i - 1];
+                    continue;
                 }
             }
+            prev_in_str = c;
         }
         out[oi++] = c;
         i++;
@@ -935,6 +900,162 @@ static void inject_missing_headers(void) {
     }
 }
 
+static int identifier_is_declared_anywhere(const char *name) {
+    size_t nl = strlen(name);
+    for (int i = 0; i < total_lines; i++) {
+        char buf[MAX_LEN];
+        strncpy(buf, source_code[i], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *p = ltrim(buf);
+        if (!(starts_with_word(p, "int") || starts_with_word(p, "float") ||
+              starts_with_word(p, "char") || starts_with_word(p, "double") ||
+              starts_with_word(p, "long") || starts_with_word(p, "short") ||
+              starts_with_word(p, "unsigned") || starts_with_word(p, "signed") ||
+              starts_with_word(p, "void"))) {
+            continue;
+        }
+        while (*p && !isspace((unsigned char)*p)) p++;
+        while (*p && isspace((unsigned char)*p)) p++;
+        while (*p) {
+            while (*p == '*' || isspace((unsigned char)*p)) p++;
+            if (!isalpha((unsigned char)*p) && *p != '_') break;
+            char *id_start = p;
+            while (is_ident_char((unsigned char)*p)) p++;
+            size_t idl = (size_t)(p - id_start);
+            if (idl == nl && strncmp(id_start, name, nl) == 0) return 1;
+            while (*p && *p != ',' && *p != ';') p++;
+            if (*p == ',') p++;
+            else break;
+        }
+    }
+    return 0;
+}
+
+static void inject_default_declaration(const char *name) {
+    if (!name || !*name) return;
+    int used = 0;
+    for (int i = 0; i < total_lines; i++) {
+        if (line_uses_identifier(source_code[i], name)) { used = 1; break; }
+    }
+    if (!used) return;
+    if (identifier_is_declared_anywhere(name)) return;
+
+    int main_brace = find_main_open_brace_line();
+    int insert_at;
+    const char *indent;
+    if (main_brace >= 0) {
+        insert_at = main_brace + 1;
+        indent = "    ";
+    } else {
+        insert_at = 0;
+        for (int i = 0; i < total_lines; i++) {
+            char *p = source_code[i];
+            while (*p && isspace((unsigned char)*p)) p++;
+            if (*p == '#') insert_at = i + 1;
+        }
+        indent = "";
+    }
+
+    if (total_lines >= MAX_LINES) return;
+    char text[MAX_LEN];
+    snprintf(text, sizeof(text), "%sint %s = 0;\n", indent, name);
+    for (int i = total_lines; i > insert_at; i--) {
+        memcpy(source_code[i], source_code[i - 1], MAX_LEN);
+    }
+    strncpy(source_code[insert_at], text, MAX_LEN - 1);
+    source_code[insert_at][MAX_LEN - 1] = '\0';
+    total_lines++;
+}
+
+static int find_main_signature_line(void) {
+    for (int i = 0; i < total_lines; i++) {
+        char buf[MAX_LEN];
+        strncpy(buf, source_code[i], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *p = ltrim(buf);
+        if (!(starts_with_word(p, "int") || starts_with_word(p, "void"))) continue;
+        if (!strstr(source_code[i], "main")) continue;
+        return i;
+    }
+    return -1;
+}
+
+static int find_main_open_brace_line(void) {
+    int sig = find_main_signature_line();
+    if (sig < 0) return -1;
+    if (strchr(source_code[sig], '{')) return sig;
+    for (int j = sig + 1; j < total_lines; j++) {
+        char b2[MAX_LEN];
+        strncpy(b2, source_code[j], sizeof(b2) - 1);
+        b2[sizeof(b2) - 1] = '\0';
+        char *q = ltrim(b2);
+        trim_trailing_whitespace(q);
+        if (*q == '\0') continue;
+        if (*q == '{') return j;
+        break;
+    }
+    return -1;
+}
+
+static int main_returns_void(void) {
+    int sig = find_main_signature_line();
+    if (sig < 0) return 0;
+    char buf[MAX_LEN];
+    strncpy(buf, source_code[sig], sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *p = ltrim(buf);
+    return starts_with_word(p, "void");
+}
+
+static void ensure_main_returns(void) {
+    if (main_returns_void()) return;
+    int open_line = find_main_open_brace_line();
+    if (open_line < 0) return;
+
+    int depth = 0;
+    int close_line = -1;
+    for (int i = open_line; i < total_lines; i++) {
+        const char *p = source_code[i];
+        int in_str = 0, in_chr = 0, esc = 0;
+        while (*p) {
+            char c = *p;
+            if (esc) { esc = 0; p++; continue; }
+            if ((in_str || in_chr) && c == '\\') { esc = 1; p++; continue; }
+            if (!in_chr && c == '"')  { in_str = !in_str; p++; continue; }
+            if (!in_str && c == '\'') { in_chr = !in_chr; p++; continue; }
+            if (!in_str && !in_chr) {
+                if (c == '{') depth++;
+                else if (c == '}') {
+                    depth--;
+                    if (depth == 0) { close_line = i; goto found; }
+                }
+            }
+            p++;
+        }
+    }
+found:
+    if (close_line < 0) return;
+
+    for (int i = close_line - 1; i > open_line; i--) {
+        char buf[MAX_LEN];
+        strncpy(buf, source_code[i], sizeof(buf) - 1);
+        buf[sizeof(buf) - 1] = '\0';
+        char *p = ltrim(buf);
+        trim_trailing_whitespace(p);
+        if (*p == '\0') continue;
+        if (starts_with_word(p, "return")) return;
+        break;
+    }
+
+    if (total_lines >= MAX_LINES) return;
+    for (int i = total_lines; i > close_line; i--) {
+        memcpy(source_code[i], source_code[i - 1], MAX_LEN);
+    }
+    strncpy(source_code[close_line], "    return 0;\n", MAX_LEN - 1);
+    source_code[close_line][MAX_LEN - 1] = '\0';
+    total_lines++;
+}
+
 static void fix_missing_closing_braces_at_eof(void) {
     int open = 0, close = 0;
     for (int i = 0; i < total_lines; i++) {
@@ -992,6 +1113,7 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "Warning: Malformed UNDECLARED_VARIABLE record in %s.\n", errors_file);
                     break;
                 }
+                inject_default_declaration(symbol);
             } else if (strcmp(err_type, "UNUSED_VARIABLE") == 0) {
                 if (fscanf(efp, "%d %49s", &line, symbol) != 2) {
                     fprintf(stderr, "Warning: Malformed UNUSED_VARIABLE record in %s.\n", errors_file);
@@ -1007,6 +1129,7 @@ int main(int argc, char **argv) {
     }
 
     fix_missing_closing_braces_at_eof();
+    ensure_main_returns();
     inject_missing_headers();
 
     save_corrected_code(output_file);

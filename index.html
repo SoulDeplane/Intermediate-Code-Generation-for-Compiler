@@ -85,8 +85,6 @@
             display: flex;
             justify-content: space-between;
         }
-
-        /* Tabs Styling */
         .tabs-header {
             padding: 0;
             display: flex;
@@ -126,9 +124,10 @@
 
         .tab-content {
             display: none;
-            flex-grow: 1;
+            flex: 1 1 0;
             flex-direction: column;
             overflow: hidden;
+            min-height: 0;
         }
 
         .tab-content.active {
@@ -136,7 +135,8 @@
         }
 
         textarea {
-            flex-grow: 1;
+            flex: 1 1 0;
+            min-height: 0;
             background: transparent;
             border: none;
             color: #cbd5e1;
@@ -198,6 +198,11 @@
             height: 100%;
         }
 
+        .output-container > .panel {
+            flex: 1 1 0;
+            min-height: 0;
+        }
+
         pre {
             margin: 0;
             padding: 15px;
@@ -205,26 +210,197 @@
             font-size: 14px;
             overflow: auto;
             color: #94a3b8;
-            flex-grow: 1;
+            flex: 1 1 0;
+            min-height: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
         }
 
         .text-error {
             color: #ef4444 !important;
         }
 
-        pre:empty::before {
+        pre:empty::before,
+        .table-view:empty::before,
+        .tree-view:empty::before {
             content: attr(placeholder);
+            color: var(--accent);
+            opacity: 0.7;
+            font-style: normal;
+            font-family: inherit;
+            font-size: 14px;
+            display: block;
+            padding: 20px;
+        }
+
+        .tree-view {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow: auto;
+            padding: 20px 24px;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 13px;
+            color: var(--text-main);
+        }
+        .tree-view ul {
+            list-style: none;
+            margin: 0;
+            padding-left: 28px;
+            position: relative;
+        }
+        .tree-view > ul {
+            padding-left: 0;
+        }
+        .tree-view li {
+            position: relative;
+            padding: 4px 0 4px 16px;
+        }
+        .tree-view ul ul li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            border-left: 1px solid var(--border);
+            height: 100%;
+            width: 0;
+        }
+        .tree-view ul ul li::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 14px;
+            border-top: 1px solid var(--border);
+            width: 14px;
+        }
+        .tree-view ul ul li:last-child::before {
+            height: 14px;
+        }
+        .tree-view .node {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border);
+        }
+        .tree-view .node.internal {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .tree-view .node.leaf {
+            color: var(--success);
+            font-family: 'Consolas', 'Courier New', monospace;
+            background: rgba(129, 178, 154, 0.08);
+            border-color: rgba(129, 178, 154, 0.3);
+        }
+        .tree-view .empty {
             color: var(--text-dim);
             font-style: italic;
+        }
+
+        .table-view {
+            flex: 1 1 0;
+            min-height: 0;
+            overflow: auto;
+            padding: 18px 22px;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 13px;
+            color: var(--text-main);
+        }
+        .table-view table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        .table-view th,
+        .table-view td {
+            border: 1px solid var(--border);
+            padding: 6px 12px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .table-view th {
+            background: rgba(255,255,255,0.04);
+            color: var(--accent);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            position: sticky;
+            top: 0;
+        }
+        .table-view tbody tr:nth-child(even) {
+            background: rgba(255,255,255,0.02);
+        }
+        .table-view tbody tr:hover {
+            background: rgba(198, 157, 109, 0.08);
+        }
+        .table-view td.mono {
+            font-family: 'Consolas', 'Courier New', monospace;
+            color: var(--success);
+        }
+        .table-view td.num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        .table-view .empty {
+            color: var(--text-dim);
+            font-style: italic;
+        }
+
+        .tab-btn.mobile-only {
+            display: none;
         }
 
         @media (max-width: 900px) {
             .app-container {
                 grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr;
             }
 
             header {
-                grid-column: span 1;
+                grid-column: 1;
+                grid-row: 1;
+            }
+
+            .output-container {
+                grid-column: 1;
+                grid-row: 2;
+            }
+
+            #inputPanel {
+                grid-column: 1;
+                grid-row: 3;
+                min-height: 0;
+            }
+
+            .tab-btn.mobile-only {
+                display: block;
+            }
+
+            .app-container.input-mode .output-container .tab-content {
+                display: none;
+            }
+
+            .app-container.input-mode .output-container > .panel {
+                flex: 0 0 auto;
+                height: auto;
+                border-bottom-left-radius: 0;
+                border-bottom-right-radius: 0;
+                border-bottom: none;
+                box-shadow: none;
+            }
+
+            .app-container.input-mode #inputPanel {
+                border-top-left-radius: 0;
+                border-top-right-radius: 0;
+                margin-top: -20px;
+            }
+
+            .app-container:not(.input-mode) #inputPanel {
+                display: none;
+            }
+
+            .app-container:not(.input-mode) .output-container {
+                grid-row: 2 / 4;
             }
         }
     </style>
@@ -239,11 +415,7 @@
             <div class="header-line"></div>
         </header>
 
-        <section class="panel">
-            <div class="panel-header">
-                <span>Input Workspace</span>
-                <span>UTF-8</span>
-            </div>
+        <section class="panel" id="inputPanel">
             <textarea id="userInput" placeholder="Enter C code here..."></textarea>
             <div class="controls">
                 <button id="execBtn">Process Data</button>
@@ -252,33 +424,34 @@
         </section>
 
         <div class="output-container">
-            <section class="panel" style="height: 100%;">
+            <section class="panel">
                 <div class="tabs-header">
+                    <button class="tab-btn mobile-only" data-tab="__input__">Input</button>
                     <button class="tab-btn active" data-tab="tac-tab">TAC & Errors</button>
                     <button class="tab-btn" data-tab="tokens-tab">Lex Tokens</button>
-                    <button class="tab-btn" data-tab="tree-tab">Parser Tree</button>
+                    <button class="tab-btn" data-tab="tree-tab">Parse Tree</button>
                     <button class="tab-btn" data-tab="symbol-tab">Symbol Table</button>
                     <button class="tab-btn" data-tab="corrected-tab">Auto-Corrected</button>
                 </div>
 
                 <div class="tab-content active" id="tac-tab">
-                    <pre id="resultOut" style="color: var(--accent);" placeholder="TAC output or errors will appear here..."></pre>
+                    <pre id="resultOut" style="color: var(--accent);" placeholder="TAC Output and Errors will appear here..."></pre>
                 </div>
                 
                 <div class="tab-content" id="tokens-tab">
-                    <pre id="tokensOut" placeholder="Lexical tokens will appear here..."></pre>
+                    <div id="tokensOut" class="table-view"  placeholder="Lex Tokens will appear here..."></div>
                 </div>
 
                 <div class="tab-content" id="tree-tab">
-                    <pre id="treeOut" placeholder="Abstract Syntax Tree will appear here..."></pre>
+                    <div id="treeOut" class="tree-view"  placeholder="Parse Tree will appear here..."></div>
                 </div>
 
                 <div class="tab-content" id="symbol-tab">
-                    <pre id="symbolOut" placeholder="Symbol table data will appear here..."></pre>
+                    <div id="symbolOut" class="table-view"  placeholder="Symbol Table will appear here..."></div>
                 </div>
 
                 <div class="tab-content" id="corrected-tab">
-                    <pre id="correctedOut" style="color: var(--success);" placeholder="Auto-corrected code will appear here..."></pre>
+                    <pre id="correctedOut" style="color: var(--success);" placeholder="Auto-Corrected Code will appear here..."></pre>
                 </div>
             </section>
         </div>
@@ -288,46 +461,149 @@
         const execBtn = document.getElementById('execBtn');
         const clearBtn = document.getElementById('clearBtn');
         const userInput = document.getElementById('userInput');
-        
-        // Output elements
         const resultOut = document.getElementById('resultOut');
         const correctedOut = document.getElementById('correctedOut');
         const tokensOut = document.getElementById('tokensOut');
         const treeOut = document.getElementById('treeOut');
         const symbolOut = document.getElementById('symbolOut');
-
-        // Tab Switching Logic
         const tabBtns = document.querySelectorAll('.tab-btn');
         const tabContents = document.querySelectorAll('.tab-content');
 
+        const appContainer = document.querySelector('.app-container');
+        if (window.matchMedia('(max-width: 900px)').matches) {
+            appContainer.classList.add('input-mode');
+        }
+
         tabBtns.forEach(btn => {
             btn.addEventListener('click', () => {
-                // Remove active class from all buttons and contents
                 tabBtns.forEach(b => b.classList.remove('active'));
-                tabContents.forEach(c => c.classList.remove('active'));
-
-                // Add active class to clicked button and corresponding content
                 btn.classList.add('active');
-                document.getElementById(btn.dataset.tab).classList.add('active');
+                if (btn.dataset.tab === '__input__') {
+                    appContainer.classList.add('input-mode');
+                } else {
+                    appContainer.classList.remove('input-mode');
+                    tabContents.forEach(c => c.classList.remove('active'));
+                    document.getElementById(btn.dataset.tab).classList.add('active');
+                }
             });
         });
 
-        // Execution Logic
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || e.ctrlKey || e.altKey || e.metaKey) return;
+            e.preventDefault();
+            const start = userInput.selectionStart;
+            const end = userInput.selectionEnd;
+            const value = userInput.value;
+            const INDENT = '        ';
+
+            if (start === end) {
+                userInput.value = value.substring(0, start) + INDENT + value.substring(end);
+                userInput.selectionStart = userInput.selectionEnd = start + INDENT.length;
+                return;
+            }
+
+            const lineStart = value.lastIndexOf('\n', start - 1) + 1;
+            const before = value.substring(0, lineStart);
+            const block = value.substring(lineStart, end);
+            const after = value.substring(end);
+            let modified;
+            let delta;
+            if (e.shiftKey) {
+                modified = block.replace(/^( {1,8}|\t)/gm, '');
+                delta = modified.length - block.length;
+            } else {
+                modified = block.replace(/^/gm, INDENT);
+                delta = modified.length - block.length;
+            }
+            userInput.value = before + modified + after;
+            userInput.selectionStart = lineStart;
+            userInput.selectionEnd = end + delta;
+        });
+        function renderTree(node) {
+            const li = document.createElement('li');
+            const span = document.createElement('span');
+            span.classList.add('node');
+            const isLeaf = !node.children || node.children.length === 0;
+            span.classList.add(isLeaf ? 'leaf' : 'internal');
+            span.textContent = node.label;
+            li.appendChild(span);
+            if (!isLeaf) {
+                const ul = document.createElement('ul');
+                for (const child of node.children) {
+                    ul.appendChild(renderTree(child));
+                }
+                li.appendChild(ul);
+            }
+            return li;
+        }
+
+        function showTree(container, root) {
+            container.innerHTML = '';
+            if (!root) {
+                container.innerHTML = '<div class="empty">No parse tree available.</div>';
+                return;
+            }
+            const ul = document.createElement('ul');
+            ul.appendChild(renderTree(root));
+            container.appendChild(ul);
+        }
+
+        function showTable(container, rows, columns, emptyMessage) {
+            container.innerHTML = '';
+            if (!rows || rows.length === 0) {
+                container.innerHTML = `<div class="empty">${emptyMessage}</div>`;
+                return;
+            }
+            const table = document.createElement('table');
+            const thead = document.createElement('thead');
+            const headRow = document.createElement('tr');
+            for (const col of columns) {
+                const th = document.createElement('th');
+                th.textContent = col.label;
+                headRow.appendChild(th);
+            }
+            thead.appendChild(headRow);
+            table.appendChild(thead);
+            const tbody = document.createElement('tbody');
+            for (const row of rows) {
+                const tr = document.createElement('tr');
+                for (const col of columns) {
+                    const td = document.createElement('td');
+                    if (col.cls) td.className = col.cls;
+                    td.textContent = row[col.key] !== undefined ? row[col.key] : '';
+                    tr.appendChild(td);
+                }
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+
+        const TOKEN_COLS = [
+            { key: 'line', label: 'Line', cls: 'num' },
+            { key: 'type', label: 'Token' },
+            { key: 'text', label: 'Text', cls: 'mono' }
+        ];
+        const SYMBOL_COLS = [
+            { key: 'name',   label: 'Name',   cls: 'mono' },
+            { key: 'kind',   label: 'Kind' },
+            { key: 'type',   label: 'Type' },
+            { key: 'scope',  label: 'Scope',  cls: 'num' },
+            { key: 'status', label: 'Status' }
+        ];
+
         execBtn.addEventListener('click', async () => {
             const input = userInput.value;
-            
-            // Reset fields
             resultOut.textContent = '';
             correctedOut.textContent = '';
-            tokensOut.textContent = '';
-            treeOut.textContent = '';
-            symbolOut.textContent = '';
+            tokensOut.innerHTML = '';
+            treeOut.innerHTML = '';
+            symbolOut.innerHTML = '';
             resultOut.classList.remove('text-error');
 
             if (!input.trim()) {
                 resultOut.classList.add('text-error');
                 resultOut.textContent = 'Error: No input found.';
-                // Auto-switch to TAC/Errors tab on input error
                 document.querySelector('[data-tab="tac-tab"]').click();
                 return;
             }
@@ -346,36 +622,30 @@
                     const finalErr = (data.final_stderr || '').trim();
                     const tac = (data.tac || '').trim();
                     const hasCorr = !!data.has_corrections;
-
-                    // 1. Handle TAC and Errors Tab Display
+                    const remainingErr = finalErr;
                     let displayContent = '';
-                    
-                    if (initialErr) {
-                        displayContent += '    --- Compiler Diagnostics ---\n' + initialErr + '\n\n';
+
+                    if (initialErr && hasCorr) {
+                        displayContent += 'Original issues detected:\n' + initialErr + '\n\n';
+                        displayContent += 'Auto-corrections applied.\n\n';
+                    } else if (initialErr) {
+                        displayContent += 'Issues detected:\n' + initialErr + '\n\n';
                     }
-                    
-                    if (hasCorr) {
-                        displayContent += '    [SUCCESS] Auto-corrections applied successfully.\n\n';
+
+                    if (remainingErr && hasCorr) {
+                        displayContent += 'Remaining after auto-correction:\n' + remainingErr + '\n\n';
                     }
-                    
-                    if (tac && tac !== "No TAC generated.") {
-                        displayContent += '    --- Generated Optimized TAC ---\n' + tac;
-                    } else if (finalErr && !initialErr) {
-                        displayContent += '    --- Errors ---\n' + finalErr;
+
+                    if (tac) {
+                        displayContent += 'Generated TAC:\n' + tac;
+                    } else if (!initialErr && !remainingErr) {
+                        displayContent = 'No output produced.';
                     }
-                    
-                    if (!displayContent) {
-                        displayContent = "No output or errors generated.";
-                    }
-                    
+
                     resultOut.textContent = displayContent;
-                    
-                    // 2. Populate Other Tabs
-                    tokensOut.textContent = data.lex_tokens || 'No lexical tokens available.';
-                    treeOut.textContent = data.parser_tree || 'No parser tree available.';
-                    symbolOut.textContent = data.symbol_table || 'No symbol table available.';
-                    
-                    // 3. Handle Auto-Corrected Code
+                    showTable(tokensOut, data.lex_tokens_json, TOKEN_COLS, 'No lexical tokens available.');
+                    showTree(treeOut, data.parser_tree_json);
+                    showTable(symbolOut, data.symbol_table_json, SYMBOL_COLS, 'No symbols recorded.');
                     correctedOut.textContent = hasCorr ? (data.corrected_code || '') : '';
                     
                     if (hasCorr) {
@@ -385,8 +655,6 @@
                         correctedTabBtn.style.color = '';
                         correctedTabBtn.textContent = 'Auto-Corrected';
                     }
-                    
-                    // Automatically switch to the Result tab
                     document.querySelector('[data-tab="tac-tab"]').click();
 
                 } else {
@@ -400,15 +668,13 @@
                 document.querySelector('[data-tab="tac-tab"]').click();
             }
         });
-
-        // Clear Logic
         clearBtn.addEventListener('click', () => {
             userInput.value = '';
             resultOut.textContent = '';
             correctedOut.textContent = '';
-            tokensOut.textContent = '';
-            treeOut.textContent = '';
-            symbolOut.textContent = '';
+            tokensOut.innerHTML = '';
+            treeOut.innerHTML = '';
+            symbolOut.innerHTML = '';
             resultOut.classList.remove('text-error');
         });
     </script>

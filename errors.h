@@ -23,11 +23,6 @@ void error_set_fatal_jmp(jmp_buf *env);
 void error_log(ErrorPhase phase, ErrorSeverity sev, int line, int col, const char *code, const char *message, const char *recovery);
 void error_logf(ErrorPhase phase, ErrorSeverity sev, int line, int col, const char *code, const char *recovery, const char *fmt, ...);
 int error_has_errors(void);
-int error_has_fatal(void);
-int error_warning_count(void);
-int error_error_count(void);
-int error_fatal_count(void);
-void error_print_all(FILE *out);
 void error_print_summary(FILE *out);
 
 #endif

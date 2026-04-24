@@ -66,7 +66,6 @@
     void printsymtable();
     void cleansymbol();
 
-    void printAST(Node* root, int level);
     void clear_tree(Node* root);
     static void* checked_calloc(size_t count, size_t size);
     static struct node* new_semantic_node(int dtype, const char *name);
@@ -74,6 +73,26 @@
     static function_sig* lookup_function(const char *name);
     static void upsert_function_signature(const char *name, int return_type, int param_count, int *param_types);
     static const char* dtype_name(int dtype);
+
+    typedef struct LexToken {
+        char type[24];
+        char text[128];
+        int line;
+    } LexToken;
+    extern LexToken token_buf[];
+    extern int token_buf_count;
+
+    typedef struct CSTNode {
+        char label[80];
+        int is_leaf;
+        struct CSTNode **children;
+        int n_children;
+        int cap;
+    } CSTNode;
+    static CSTNode *cst_parse_program(void);
+    static void cst_print(CSTNode *n, const char *prefix, int is_last, int is_root);
+    static void cst_print_json(CSTNode *n, FILE *out);
+    static void cst_free(CSTNode *n);
 %}
 
 %code requires {
@@ -121,28 +140,41 @@
 
 %%
 S : program {
-    if(!error_has_errors()) {
-        printf("\n--- Intermediate Code (TAC) ---\n");
-        if(tree_top != NULL) {
-            icg_out = fopen("icg.txt", "w");
-            if (icg_out) {
-                generate_ICG(tree_top->node);
-                fclose(icg_out);
-                printf("Intermediate Code Successfully exported to icg.txt\n");
-            } else {
-                printf("Failed to open icg.txt for writing.\n");
-            }
+    if(!error_has_errors() && tree_top != NULL) {
+        icg_out = fopen("icg.txt", "w");
+        if (icg_out) {
+            generate_ICG(tree_top->node);
+            fclose(icg_out);
         }
-
-        printf("\n--- Abstract Syntax Tree ---\n");
-        tree_stack *temp = tree_top;
-        while(temp != NULL) {
-            printAST(temp->node, 0);
-            temp = temp->next;
-        }
-    } else {
-        printf("\n--- Compilation Halted Due to Errors ---\n");
     }
+
+    printf("\n--- Parser Tree ---\n");
+    {
+        CSTNode *cst_root = cst_parse_program();
+        cst_print(cst_root, "", 1, 1);
+        printf("\n--- Parser Tree JSON ---\n");
+        cst_print_json(cst_root, stdout);
+        printf("\n");
+        cst_free(cst_root);
+    }
+
+    printf("\n--- Lexical Tokens JSON ---\n[");
+    for (int i = 0; i < token_buf_count; i++) {
+        if (i) fputc(',', stdout);
+        printf("{\"line\":%d,\"type\":\"%s\",\"text\":\"",
+               token_buf[i].line, token_buf[i].type);
+        for (const char *p = token_buf[i].text; *p; p++) {
+            unsigned char c = (unsigned char)*p;
+            if (c == '"' || c == '\\') { fputc('\\', stdout); fputc(c, stdout); }
+            else if (c == '\n') fputs("\\n", stdout);
+            else if (c == '\r') fputs("\\r", stdout);
+            else if (c == '\t') fputs("\\t", stdout);
+            else if (c < 0x20) printf("\\u%04x", c);
+            else fputc(c, stdout);
+        }
+        fputs("\"}", stdout);
+    }
+    printf("]\n");
 
     while(tree_top != NULL) {
         Node *root = pop_tree();
@@ -151,7 +183,7 @@ S : program {
     struct node *ftp = first;
     while(ftp != NULL) {
         if(ftp->valid == 1) {
-            if (ftp->is_used == 0 && ftp->sym_kind == SYM_KIND_VAR) {
+            if (ftp->is_used == 0 && ftp->sym_kind == SYM_KIND_VAR && strcmp(ftp->name, "main") != 0) {
                 error_logf(ERR_PHASE_SEM, ERR_SEV_WARNING, lno, 0, "UNUSED_VARIABLE", "Continue with symbol table checks", "Variable '%s' is declared but never used.", ftp->name);
             }
             if (ftp->is_allocated == 1) {
@@ -698,6 +730,8 @@ int main() {
 
     printf("Starting modern C parser...\n");
     printf("\n--- Lexical Tokens ---\n");
+    printf("LINE  TOKEN              TEXT\n");
+    printf("====  =================  ====================\n");
     int parse_status = yyparse();
     if (parse_status != 0 && !error_has_errors()) {
         report_error(lno, "Parsing failed due to unrecoverable syntax errors.");
@@ -777,11 +811,6 @@ void yyerror(const char* s) {
     report_error(lno, (s && s[0] != '\0') ? s : "Syntax error");
 }
 
-void printdebug(const char* msg, char c) {
-    if (c != ' ') printf("Debug: %s '%c' at line %d\n", msg, c, lno);
-    else printf("Debug: %s at line %d\n", msg, lno);
-}
-
 struct node* lookup(char *name) {
     struct node *ptr = first;
     while(ptr != NULL) {
@@ -792,7 +821,7 @@ struct node* lookup(char *name) {
 }
 
 struct node* insert(char *name, int type) {
-    if (type == 3) {
+    if (type == 3 && current_insert_kind != SYM_KIND_FUNC) {
         char errmsg[100];
         sprintf(errmsg, "Variable '%s' cannot be declared as type 'void'", name);
         report_error(lno, errmsg);
@@ -821,14 +850,60 @@ struct node* insert(char *name, int type) {
     return newnode;
 }
 
+static const char* sym_kind_name(int k) {
+    switch (k) {
+        case SYM_KIND_VAR:   return "variable";
+        case SYM_KIND_FUNC:  return "function";
+        case SYM_KIND_PARAM: return "parameter";
+        default:             return "unknown";
+    }
+}
+
+static const char* sym_type_name(int t) {
+    switch (t) {
+        case 0: return "int";
+        case 1: return "float";
+        case 2: return "char";
+        case 3: return "void";
+        case 4: return "pointer";
+        default: return "unknown";
+    }
+}
+
 void printsymtable() {
     printf("\n--- Symbol Table ---\n");
+    printf("NAME            KIND        TYPE      SCOPE   STATUS\n");
+    printf("==============  ==========  ========  ======  ======\n");
     struct node *ptr = first;
     while(ptr != NULL) {
-        printf("Name: %-10s | Scope: %d | Type: %d | Status: %s\n",
-               ptr->name, ptr->scope, ptr->dtype, ptr->valid ? "Active" : "Dead");
+        if (!(ptr->sym_kind == SYM_KIND_FUNC && strcmp(ptr->name, "main") == 0)) {
+            printf("%-14s  %-10s  %-8s  %-6d  %s\n",
+                   ptr->name,
+                   sym_kind_name(ptr->sym_kind),
+                   sym_type_name(ptr->dtype),
+                   ptr->scope,
+                   ptr->valid ? "active" : "dead");
+        }
         ptr = ptr->link;
     }
+
+    printf("\n--- Symbol Table JSON ---\n[");
+    int first_row = 1;
+    ptr = first;
+    while(ptr != NULL) {
+        if (!(ptr->sym_kind == SYM_KIND_FUNC && strcmp(ptr->name, "main") == 0)) {
+            if (!first_row) fputc(',', stdout);
+            first_row = 0;
+            printf("{\"name\":\"%s\",\"kind\":\"%s\",\"type\":\"%s\",\"scope\":%d,\"status\":\"%s\"}",
+                   ptr->name,
+                   sym_kind_name(ptr->sym_kind),
+                   sym_type_name(ptr->dtype),
+                   ptr->scope,
+                   ptr->valid ? "active" : "dead");
+        }
+        ptr = ptr->link;
+    }
+    printf("]\n");
 }
 
 void cleansymbol() {
@@ -873,17 +948,210 @@ void create_node(char *token, int leaf) {
     push_tree(newnode);
 }
 
-void printAST(Node* root, int level) {
-    if (root == NULL || strcmp(root->token, "dummy") == 0 || strcmp(root->token, AST_ERROR_TOKEN) == 0) return;
-    for (int i = 0; i < level; i++) printf("  ");
-    printf("-> %s\n", root->token);
-    printAST(root->left, level + 1);
-    printAST(root->right, level + 1);
+static CSTNode *cst_new(const char *label, int is_leaf) {
+    CSTNode *n = (CSTNode*)checked_calloc(1, sizeof(CSTNode));
+    snprintf(n->label, sizeof(n->label), "%s", label);
+    n->is_leaf = is_leaf;
+    return n;
+}
+
+static void cst_add(CSTNode *parent, CSTNode *child) {
+    if (!parent || !child) return;
+    if (parent->n_children == parent->cap) {
+        int nc = parent->cap ? parent->cap * 2 : 4;
+        parent->children = (CSTNode**)realloc(parent->children, nc * sizeof(CSTNode*));
+        parent->cap = nc;
+    }
+    parent->children[parent->n_children++] = child;
+}
+
+static void cst_free(CSTNode *n) {
+    if (!n) return;
+    for (int i = 0; i < n->n_children; i++) cst_free(n->children[i]);
+    free(n->children);
+    free(n);
+}
+
+static void cst_print(CSTNode *n, const char *prefix, int is_last, int is_root) {
+    if (!n) return;
+    if (is_root) {
+        printf("%s\n", n->label);
+    } else {
+        printf("%s%s %s\n", prefix, is_last ? "`--" : "+--", n->label);
+    }
+    char child_prefix[1024];
+    if (is_root) {
+        child_prefix[0] = '\0';
+    } else {
+        snprintf(child_prefix, sizeof(child_prefix), "%s%s",
+                 prefix, is_last ? "   " : "|  ");
+    }
+    for (int i = 0; i < n->n_children; i++) {
+        cst_print(n->children[i], child_prefix, i == n->n_children - 1, 0);
+    }
+}
+
+static void cst_print_json(CSTNode *n, FILE *out) {
+    if (!n) { fputs("null", out); return; }
+    fputs("{\"label\":\"", out);
+    for (const char *p = n->label; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { fputc('\\', out); fputc(c, out); }
+        else if (c == '\n') fputs("\\n", out);
+        else if (c == '\r') fputs("\\r", out);
+        else if (c == '\t') fputs("\\t", out);
+        else if (c < 0x20) fprintf(out, "\\u%04x", c);
+        else fputc(c, out);
+    }
+    fputs("\",\"children\":[", out);
+    for (int i = 0; i < n->n_children; i++) {
+        if (i) fputc(',', out);
+        cst_print_json(n->children[i], out);
+    }
+    fputs("]}", out);
+}
+
+static int cst_pos = 0;
+
+static int tk_is(int idx, const char *type) {
+    return idx < token_buf_count && strcmp(token_buf[idx].type, type) == 0;
+}
+
+static int tk_is_type_kw(int idx) {
+    if (idx >= token_buf_count) return 0;
+    const char *t = token_buf[idx].type;
+    return !strcmp(t,"INT") || !strcmp(t,"FLOAT") || !strcmp(t,"CHAR") ||
+           !strcmp(t,"VOID") || !strcmp(t,"DOUBLE") || !strcmp(t,"LONG") ||
+           !strcmp(t,"SHORT") || !strcmp(t,"UNSIGNED") || !strcmp(t,"SIGNED") ||
+           !strcmp(t,"CONST") || !strcmp(t,"STATIC") || !strcmp(t,"EXTERN");
+}
+
+static CSTNode *cst_consume(void) {
+    if (cst_pos >= token_buf_count) return NULL;
+    CSTNode *n = cst_new(token_buf[cst_pos].text, 1);
+    cst_pos++;
+    return n;
+}
+
+static CSTNode *cst_parse_statement(void);
+static CSTNode *cst_parse_block(void);
+
+static CSTNode *cst_parse_paren_group(const char *label) {
+    CSTNode *n = cst_new(label, 0);
+    int depth = 0;
+    if (tk_is(cst_pos, "LPAREN")) { cst_add(n, cst_consume()); depth++; }
+    while (cst_pos < token_buf_count && depth > 0) {
+        if (tk_is(cst_pos, "LPAREN")) depth++;
+        else if (tk_is(cst_pos, "RPAREN")) depth--;
+        cst_add(n, cst_consume());
+    }
+    return n;
+}
+
+static CSTNode *cst_parse_until_semi(const char *label) {
+    CSTNode *n = cst_new(label, 0);
+    int depth = 0;
+    while (cst_pos < token_buf_count) {
+        if (tk_is(cst_pos, "LPAREN") || tk_is(cst_pos, "LBRACK")) depth++;
+        else if (tk_is(cst_pos, "RPAREN") || tk_is(cst_pos, "RBRACK")) depth--;
+        int is_semi = tk_is(cst_pos, "SEMICOLON");
+        cst_add(n, cst_consume());
+        if (depth <= 0 && is_semi) break;
+        if (depth <= 0 && tk_is(cst_pos, "RBRACE")) break;
+    }
+    return n;
+}
+
+static CSTNode *cst_parse_block(void) {
+    CSTNode *n = cst_new("block", 0);
+    if (tk_is(cst_pos, "LBRACE")) cst_add(n, cst_consume());
+    while (cst_pos < token_buf_count && !tk_is(cst_pos, "RBRACE")) {
+        cst_add(n, cst_parse_statement());
+    }
+    if (tk_is(cst_pos, "RBRACE")) cst_add(n, cst_consume());
+    return n;
+}
+
+static CSTNode *cst_parse_if(void) {
+    CSTNode *n = cst_new("if_statement", 0);
+    cst_add(n, cst_consume());
+    if (tk_is(cst_pos, "LPAREN")) cst_add(n, cst_parse_paren_group("condition"));
+    cst_add(n, cst_parse_statement());
+    if (tk_is(cst_pos, "ELSE")) {
+        cst_add(n, cst_consume());
+        cst_add(n, cst_parse_statement());
+    }
+    return n;
+}
+
+static CSTNode *cst_parse_while(void) {
+    CSTNode *n = cst_new("while_statement", 0);
+    cst_add(n, cst_consume());
+    if (tk_is(cst_pos, "LPAREN")) cst_add(n, cst_parse_paren_group("condition"));
+    cst_add(n, cst_parse_statement());
+    return n;
+}
+
+static CSTNode *cst_parse_for(void) {
+    CSTNode *n = cst_new("for_statement", 0);
+    cst_add(n, cst_consume());
+    if (tk_is(cst_pos, "LPAREN")) cst_add(n, cst_parse_paren_group("for_header"));
+    cst_add(n, cst_parse_statement());
+    return n;
+}
+
+static CSTNode *cst_parse_statement(void) {
+    if (cst_pos >= token_buf_count) return cst_new("(empty)", 0);
+    if (tk_is(cst_pos, "IF"))     return cst_parse_if();
+    if (tk_is(cst_pos, "WHILE"))  return cst_parse_while();
+    if (tk_is(cst_pos, "FOR"))    return cst_parse_for();
+    if (tk_is(cst_pos, "LBRACE")) return cst_parse_block();
+    if (tk_is(cst_pos, "RETURN")) return cst_parse_until_semi("return_statement");
+    if (tk_is_type_kw(cst_pos))   return cst_parse_until_semi("declaration");
+    return cst_parse_until_semi("expression_statement");
+}
+
+static CSTNode *cst_parse_function_def(void) {
+    CSTNode *n = cst_new("function_definition", 0);
+    cst_add(n, cst_consume());
+    while (tk_is(cst_pos, "MULT")) cst_add(n, cst_consume());
+    if (tk_is(cst_pos, "IDENTIFIER")) cst_add(n, cst_consume());
+    if (tk_is(cst_pos, "LPAREN")) cst_add(n, cst_parse_paren_group("parameters"));
+    if (tk_is(cst_pos, "LBRACE")) cst_add(n, cst_parse_block());
+    return n;
+}
+
+static CSTNode *cst_parse_program(void) {
+    cst_pos = 0;
+    CSTNode *root = cst_new("program", 0);
+    while (cst_pos < token_buf_count) {
+        if (tk_is(cst_pos, "PREPROC")) {
+            CSTNode *p = cst_new("preprocessor", 0);
+            cst_add(p, cst_consume());
+            cst_add(root, p);
+            continue;
+        }
+        if (tk_is_type_kw(cst_pos)) {
+            int p = cst_pos + 1;
+            while (p < token_buf_count && (tk_is(p, "MULT") || tk_is(p, "IDENTIFIER"))) p++;
+            if (p < token_buf_count && tk_is(p, "LPAREN")) {
+                cst_add(root, cst_parse_function_def());
+            } else {
+                cst_add(root, cst_parse_until_semi("declaration"));
+            }
+            continue;
+        }
+        if (tk_is(cst_pos, "LBRACE")) { cst_add(root, cst_parse_block()); continue; }
+        cst_add(root, cst_parse_statement());
+    }
+    return root;
 }
 
 void clear_tree(Node* root) {
     if (root == NULL) return;
     clear_tree(root->left);
+    clear_tree(root->mid1);
+    clear_tree(root->mid2);
     clear_tree(root->right);
     free(root);
 }

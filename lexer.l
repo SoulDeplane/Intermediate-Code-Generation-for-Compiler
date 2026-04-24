@@ -8,9 +8,23 @@
     #include "errors.h"
     int lno = 1;
     int colno = 1;
-    void printdebug(const char* msg, char c);
+    #define MAX_TOKENS 4096
+    typedef struct LexToken {
+        char type[24];
+        char text[128];
+        int line;
+    } LexToken;
+    LexToken token_buf[MAX_TOKENS];
+    int token_buf_count = 0;
+    static void store_token(const char *type, const char *text) {
+        if (token_buf_count >= MAX_TOKENS) return;
+        LexToken *t = &token_buf[token_buf_count++];
+        snprintf(t->type, sizeof(t->type), "%s", type);
+        snprintf(t->text, sizeof(t->text), "%s", text);
+        t->line = lno;
+    }
     #define YY_USER_ACTION colno += yyleng;
-    #define RET(t) { printf("Token: %s | Text: %s\n", #t, yytext); return t; }
+    #define RET(t) { store_token(#t, yytext); printf("%4d  %-17s  %s\n", lno, #t, yytext); return t; }
 %}
 
 %%
@@ -21,7 +35,7 @@
 <COMMENT>"*/" {BEGIN(INITIAL);}
 [ \t\r]+  ;
 \n  {lno++; colno = 1;}
-^#.* ;
+^#.* { store_token("PREPROC", yytext); printf("%4d  %-17s  %s\n", lno, "PREPROC", yytext); }
 \\\n {lno++; colno = 1;}
 "auto"     {RET(AUTO);}
 "break"    {RET(BREAK);}
